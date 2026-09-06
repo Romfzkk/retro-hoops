@@ -1,6 +1,9 @@
-tools/
-build/
+# Godot editor binaries and export templates, fetched by tools/dev/setup.sh
+/tools/*.exe
+/tools/*.zip
+/tools/*.tpz
+/tools/tpl/
+
+/build/
 game/.godot/
 game/android/
-*.zip
-*.tpz
