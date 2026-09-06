@@ -1,0 +1,6 @@
+tools/
+build/
+game/.godot/
+game/android/
+*.zip
+*.tpz
