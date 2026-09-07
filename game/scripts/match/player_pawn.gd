@@ -626,6 +626,7 @@ func take_ball(new_ball: Ball) -> void:
 	ball_hand = 1.0 if _rng.randf() < 0.72 else -1.0
 	_update_ball_anchor(0.0)
 	ball.hold(self, ball_anchor, get_instance_id())
+	Sound.play("catch", -12.0, randf_range(0.9, 1.15))
 	ball_gathered.emit(self)
 
 

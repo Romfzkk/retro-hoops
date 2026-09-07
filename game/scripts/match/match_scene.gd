@@ -67,6 +67,9 @@ func _ready() -> void:
 		Jumbotron.create(self, ArenaBuilder.roof_height() - 4.5, self)
 
 	ball = Ball.create()
+	ball.touched_floor.connect(_on_ball_bounced)
+	ball.hit_rim.connect(func(): Sound.play("rim", -4.0, randf_range(0.94, 1.08)))
+	ball.hit_backboard.connect(func(): Sound.play("backboard", -3.0))
 	add_child(ball)
 
 	_spawn_squads()
@@ -364,6 +367,8 @@ func _score(basket: int, points: int) -> void:
 	if _verbose:
 		print("  -> MADE %d" % points)
 	camera.shake(0.6 if points == 3 else 0.35)
+	Sound.play("swish", -2.0)
+	Sound.react(0.75 if points == 3 else 0.45)
 	hud.announce("%d PTS" % points, points == 3)
 	_dead_ball(1 - scoring_team, INBOUND_PAUSE)
 
@@ -375,6 +380,8 @@ func _resolve_miss() -> void:
 		print("  -> MISS  ball=(%.2f,%.2f,%.2f)" % [ball.global_position.x,
 			ball.global_position.y, ball.global_position.z])
 	box.record_miss(int(_pending_shot["shooter"]), int(_pending_shot["points"]))
+	if not _balance_run:
+		Sound.react(0.12)
 	_pending_shot.clear()
 
 
@@ -391,6 +398,7 @@ func _check_out_of_bounds() -> void:
 	_resolve_miss()
 	var to_team := 1 - _last_touch_team()
 	events["out_of_bounds"] = int(events["out_of_bounds"]) + 1
+	Sound.play("whistle", -6.0)
 	hud.announce("OUT OF BOUNDS", false)
 	_dead_ball(to_team, INBOUND_PAUSE * 0.8)
 
@@ -403,6 +411,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			Game.goto("res://scenes/box_score.tscn")
 		else:
 			Game.goto("res://scenes/main_menu.tscn")
+
+
+func _on_ball_bounced(_position: Vector3) -> void:
+	if _balance_run:
+		return
+	Sound.play("bounce", -9.0, randf_range(0.92, 1.1))
 
 
 func _last_touch_team() -> int:
@@ -451,17 +465,23 @@ func _on_steal_attempt(thief: PlayerPawn, target: PlayerPawn) -> void:
 	box.add(thief.get_instance_id(), "stl")
 	box.add(target.get_instance_id(), "to")
 	clock.reset_shot_clock()
+	Sound.play("squeak", -8.0)
+	Sound.react(0.5)
 	hud.announce("STEAL", false)
 
 
 func _on_dunk(pawn: PlayerPawn) -> void:
 	events["dunks"] = int(events["dunks"]) + 1
 	camera.shake(1.0)
+	Sound.play("rim", 0.0, 0.86)
+	Sound.play("cheer", -3.0)
+	Sound.react(1.0)
 	hud.announce("SLAM", true)
 
 
 func _on_shot_clock_expired() -> void:
 	events["shot_clock"] = int(events["shot_clock"]) + 1
+	Sound.play("buzzer", -8.0)
 	hud.announce("SHOT CLOCK", false)
 	_resolve_miss()
 	_dead_ball(1 - ctx.possession, INBOUND_PAUSE * 0.8)
@@ -475,6 +495,7 @@ func _on_quarter_expired(_quarter: int) -> void:
 	ctx.phase = MatchContext.Phase.DEAD
 	_phase_timer = QUARTER_BREAK
 	_resume_phase = MatchContext.Phase.INBOUND
+	Sound.play("buzzer", -4.0)
 	hud.announce("END OF %s" % clock.period_name(), false)
 
 

@@ -35,6 +35,10 @@ the playoffs. It is not finished — see [Limitations](#limitations) and
 - [x] Local two player on one screen (keyboard plus pad, or two pads)
 - [x] Online two player, host authoritative, LAN discovery or direct address
 
+**Audio**
+- [x] Every sound synthesised at runtime: rim, net, backboard, dribble, whistle, buzzer
+- [x] Crowd bed whose level tracks what is happening on the floor
+
 **Presentation**
 - [x] Broadcast camera plus behind, high, courtside and baseline angles
 - [x] Procedural player models with team kits, numbers, body types and skin tones
@@ -123,6 +127,9 @@ so you can add your own. Format and an example: [docs/player-packs.md](docs/play
 ## Development tools
 
 ```bash
+# Run the self tests (2745 checks: league, geometry, shot solver, packs, audio)
+godot --headless --path game res://scenes/self_test.tscn
+
 # Play a headless game and print a box score, for balance work
 godot --headless --path game res://scenes/match.tscn -- --sim 330
 
@@ -146,7 +153,6 @@ turnovers between the two teams.
 
 Things that are genuinely not there or not good yet:
 
-- **No audio.** Nothing is wired up.
 - **No fouls or free throws.** Contact is ignored; there is no bonus and no
   foul trouble.
 - **No traveling, backcourt or three-second violations.** Only the shot clock
@@ -168,7 +174,7 @@ Things that are genuinely not there or not good yet:
 
 **Next**
 - Fouls, free throws and the bonus
-- Procedural audio: rim, net, sneakers, crowd reacting to the run of play
+- Menu music, and commentary call-outs
 - Substitutions and a rotation the AI manages
 - Half-court rules for 3-on-3
 

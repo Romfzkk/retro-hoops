@@ -91,6 +91,8 @@ func _move(step: int) -> void:
 		next = wrapi(next + step, 0, rows.size())
 		if bool(rows[next].get("enabled", true)):
 			break
+	if next != selected:
+		Sound.play("ui_move", -14.0)
 	selected = next
 
 
@@ -103,6 +105,7 @@ func _adjust(step: int) -> void:
 func _activate() -> void:
 	if rows.is_empty() or not bool(rows[selected].get("enabled", true)):
 		return
+	Sound.play("ui_select", -12.0)
 	chosen.emit(String(rows[selected]["id"]))
 
 

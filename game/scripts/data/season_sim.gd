@@ -8,22 +8,32 @@ extends RefCounted
 const BASE_POSSESSIONS := 97.0
 const BASE_RATING := 108.0
 const HOME_EDGE := 2.6
-const RATING_WEIGHT := 1.55
-const NOISE := 7.5
+const RATING_WEIGHT := 0.85
+const NOISE := 6.0
+const OVERTIME_POSSESSIONS := 9.0
+const MAX_OVERTIMES := 4
+# The tails of the noise otherwise throw up scorelines basketball does not have.
+const MIN_SCORE := 62
+const MAX_SCORE := 158
 
 
 static func play(home: Dictionary, away: Dictionary,
 		rng: RandomNumberGenerator) -> Dictionary:
 	var possessions := BASE_POSSESSIONS + rng.randfn(0.0, 4.0)
-	var home_score := _score(home, away, possessions, HOME_EDGE, rng)
-	var away_score := _score(away, home, possessions, 0.0, rng)
+	var home_score := clampi(_score(home, away, possessions, HOME_EDGE, rng),
+		MIN_SCORE, MAX_SCORE)
+	var away_score := clampi(_score(away, home, possessions, 0.0, rng),
+		MIN_SCORE, MAX_SCORE)
+
+	# Overtime runs the same model over a few extra possessions. It is added on
+	# top, so the regulation clamp must not apply to it.
+	var periods := 0
+	while home_score == away_score and periods < MAX_OVERTIMES:
+		periods += 1
+		home_score += _score(home, away, OVERTIME_POSSESSIONS, HOME_EDGE, rng)
+		away_score += _score(away, home, OVERTIME_POSSESSIONS, 0.0, rng)
 	if home_score == away_score:
-		# Overtime, decided by the same model over four extra minutes.
-		var extra := 9.0
-		home_score += _score(home, away, extra, HOME_EDGE, rng)
-		away_score += _score(away, home, extra, 0.0, rng)
-		if home_score == away_score:
-			home_score += 1
+		home_score += 1
 	return {"home": home_score, "away": away_score}
 
 
@@ -33,7 +43,7 @@ static func _score(team: Dictionary, opponent: Dictionary, possessions: float,
 	var defence := float(League.team_ovr(opponent)) - 75.0
 	var rating := BASE_RATING + (offence - defence * 0.85) * RATING_WEIGHT + edge
 	rating += rng.randfn(0.0, NOISE)
-	return int(round(maxf(possessions * rating / 100.0, 55.0)))
+	return int(round(maxf(possessions * rating / 100.0, 0.0)))
 
 
 ## Plays every unplayed game on the current day except the one the user is in.
