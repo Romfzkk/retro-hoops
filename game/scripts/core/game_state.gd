@@ -13,7 +13,14 @@ var last_box_score: Dictionary = {}
 var _packs_applied: Array[String] = []
 
 
+## Deferred because most callers are inside a signal or a physics step, and
+## swapping the scene there trips "parent node is busy adding/removing
+## children".
 func goto(scene_path: String) -> void:
+	_change_scene.call_deferred(scene_path)
+
+
+func _change_scene(scene_path: String) -> void:
 	var err := get_tree().change_scene_to_file(scene_path)
 	if err != OK:
 		push_error("Cannot open %s: %s" % [scene_path, error_string(err)])
