@@ -166,7 +166,9 @@ Things that are genuinely not there or not good yet:
 - **The AI does not run set plays.** It spaces, cuts, drives and kicks out, but
   there is no playbook.
 - **Season is one year.** No offseason, draft, trades or progression.
-- **Android is tested in an emulator**, not across real devices.
+- **Android is untested on hardware.** The APK builds and signs, and the touch
+  controls and mobile renderer are wired up, but nothing has been run on a
+  phone yet. Treat it as unverified.
 
 ## Roadmap
 
