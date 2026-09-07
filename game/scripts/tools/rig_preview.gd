@@ -55,9 +55,9 @@ func _ready() -> void:
 
 	var camera := Camera3D.new()
 	if FrameCapture.has_flag("--closeup"):
-		camera.position = Vector3(-4.0, 1.55, 1.55)
+		camera.position = Vector3(-4.35, 1.52, 1.9)
 		camera.rotation_degrees = Vector3(-4.0, 0.0, 0.0)
-		camera.fov = 28.0
+		camera.fov = 32.0
 	else:
 		camera.position = Vector3(0.0, 1.7, 6.2)
 		camera.rotation_degrees = Vector3(-5.0, 0.0, 0.0)

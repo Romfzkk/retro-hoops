@@ -1,21 +1,24 @@
 class_name PlayerRig
 extends Node3D
 
-# Segmented humanoid built from primitives at load and driven by joint
-# rotations. Every segment is capped with a sphere the same radius as the
-# segment end, which is what stops the limbs reading as disconnected tubes.
+# A skinned humanoid on a real skeleton, generated at load.
 #
-# Local axes: limbs hang down -Y. +X rotation swings a limb forward (-Z),
+# The body is one continuous lofted surface bound to bones, so bending an elbow
+# deforms the skin. The previous rig hung a separate primitive off every joint,
+# which is exactly what made it read as parts bolted together.
+#
+# Kit is two more skinned surfaces over the same skeleton, so a jersey moves
+# with the chest instead of floating near it.
+#
+# Local axes: bones hang down -Y. +X rotation swings a limb forward (-Z),
 # +Z swings it out to the player's left.
 
+## Joints the animator writes to. Order is irrelevant; names must match.
 const JOINTS := [
 	"hips", "spine", "chest", "head",
 	"shoulder_l", "elbow_l", "shoulder_r", "elbow_r",
 	"hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r",
 ]
-
-const SEGMENTS := 16
-const SPHERE_RINGS := 8
 
 var joints: Dictionary = {}
 var hand_l: Node3D
@@ -27,14 +30,12 @@ var standing_reach := 2.6
 
 var pose: Dictionary = {}
 var _target_pose: Dictionary = {}
+var _bones: Dictionary = {}
+var _skeleton: Skeleton3D
 var _detail := 1
 var _visible_body := true
 
 
-## `with_meshes` off builds the joint hierarchy and the body metrics but no
-## geometry. Balance runs spawn ten players and never draw them; skipping the
-## ~400 mesh instances each is what makes a headless match faster than a
-## watched one.
 static func create(player: Dictionary, team: Dictionary, host: Node,
 		with_meshes: bool = true) -> PlayerRig:
 	var rig := PlayerRig.new()
@@ -46,16 +47,40 @@ static func create(player: Dictionary, team: Dictionary, host: Node,
 	return rig
 
 
-# Proportions in metres, derived once and shared by the skeleton and the
-# geometry. `bulk` is the only knob for body type: heavier players carry more
-# through the trunk and thighs.
+func _build(player: Dictionary, team: Dictionary, host: Node) -> void:
+	var body := _proportions(player)
+	shoulder_height = body["hip_y"] + body["torso"]
+	standing_reach = shoulder_height + body["upper_arm"] + body["forearm"] \
+		+ body["hand"]
+
+	_skeleton = Skeleton3D.new()
+	_skeleton.name = "Skeleton"
+	add_child(_skeleton)
+	_build_skeleton(body)
+
+	for key in JOINTS:
+		pose[key] = Vector3.ZERO
+		_target_pose[key] = Vector3.ZERO
+
+	hand_l = _attach_to_bone("hand_l", "wrist_l",
+		Vector3(0.0, -body["hand"] * 0.5, 0.0))
+	hand_r = _attach_to_bone("hand_r", "wrist_r",
+		Vector3(0.0, -body["hand"] * 0.5, 0.0))
+	head_node = _attach_to_bone("head_anchor", "head", Vector3.ZERO)
+
+	if _visible_body:
+		_build_surfaces(player, team, host, body)
+
+
+# Everything the body is measured from. `bulk` is the one knob for body type:
+# a heavier player carries more through the trunk, thighs and arms.
 func _proportions(player: Dictionary) -> Dictionary:
 	var h := height
-	var bulk := 0.90 + float(player["str"]) / 99.0 * 0.26
-	var lean := 1.06 - (float(player["str"]) / 99.0) * 0.12
-	var ankle_y := 0.052 * h
-	var shin := 0.240 * h
-	var thigh := 0.238 * h
+	var bulk := 0.94 + float(player["str"]) / 99.0 * 0.16
+	var ankle_y := 0.042 * h
+	var shin := 0.252 * h
+	var thigh := 0.252 * h
+	var torso := 0.278 * h
 	return {
 		"h": h,
 		"bulk": bulk,
@@ -63,392 +88,453 @@ func _proportions(player: Dictionary) -> Dictionary:
 		"shin": shin,
 		"thigh": thigh,
 		"hip_y": ankle_y + shin + thigh,
-		"torso": 0.290 * h,
-		"neck": 0.046 * h,
-		"head_radius": 0.076 * h,
-		"shoulder_half": 0.120 * h * lean,
+		"torso": torso,
+		"neck": 0.034 * h,
+		# Roughly seven and a half heads tall. A bigger head is what made the
+		# earlier build read as stumpy.
+		"head_radius": 0.068 * h,
+		# Broad shoulders over a narrow waist is most of what reads as athletic.
+		"shoulder_half": 0.122 * h,
 		"hip_half": 0.070 * h,
-		"upper_arm": 0.180 * h,
-		"forearm": 0.146 * h,
+		"upper_arm": 0.178 * h,
+		"forearm": 0.152 * h,
+		"hand": 0.092 * h,
+
+		# Trunk cross-sections, shared by the body and the kit so a shell can
+		# never end up narrower than the body it is supposed to cover.
+		"r_pelvis": 0.086 * h * bulk,
+		"r_hip": 0.090 * h * bulk,
+		"r_waist": 0.078 * h * bulk,
+		"r_ribs": 0.096 * h * bulk,
+		"r_chest": 0.108 * h * bulk,
+		"r_shoulders": 0.114 * h * bulk,
+		"r_collar": 0.074 * h,
+		## How far the kit sits proud of the skin.
+		"kit": 0.011 * h,
 	}
 
 
-func _build(player: Dictionary, team: Dictionary, host: Node) -> void:
-	var body := _proportions(player)
-	shoulder_height = body["hip_y"] + body["torso"]
-	standing_reach = shoulder_height + body["upper_arm"] + body["forearm"] \
-		+ 0.118 * body["h"]
-
-	_build_skeleton(body)
-	if _visible_body:
-		_build_geometry(player, team, host, body)
-
-	for key in JOINTS:
-		pose[key] = Vector3.ZERO
-		_target_pose[key] = Vector3.ZERO
-
-
-# Joints only. A balance run needs the hierarchy and the reach numbers but
-# never draws anything, so the geometry pass is skipped entirely.
 func _build_skeleton(body: Dictionary) -> void:
 	var torso: float = body["torso"]
-	var hips := _joint("hips", self, Vector3(0.0, body["hip_y"], 0.0))
-	var spine := _joint("spine", hips, Vector3.ZERO)
-	var chest := _joint("chest", spine, Vector3(0.0, torso * 0.62, 0.0))
-	head_node = _joint("head", chest, Vector3(0.0, torso * 0.38, 0.0))
+	_add_bone("hips", -1, Vector3(0.0, body["hip_y"], 0.0))
+	_add_bone("spine", "hips", Vector3(0.0, torso * 0.32, 0.0))
+	_add_bone("chest", "spine", Vector3(0.0, torso * 0.34, 0.0))
+	_add_bone("neck", "chest", Vector3(0.0, torso * 0.34, 0.0))
+	_add_bone("head", "neck", Vector3(0.0, body["neck"], 0.0))
 
-	for side in [-1.0, 1.0]:
+	for side in [1.0, -1.0]:
 		var tag := "l" if side > 0.0 else "r"
-		var shoulder := _joint("shoulder_%s" % tag, chest,
-			Vector3(body["shoulder_half"] * 0.88 * side, torso * 0.38, 0.0))
-		var elbow := _joint("elbow_%s" % tag, shoulder,
+		_add_bone("shoulder_%s" % tag, "chest",
+			Vector3(body["shoulder_half"] * side, torso * 0.34, 0.0))
+		_add_bone("elbow_%s" % tag, "shoulder_%s" % tag,
 			Vector3(0.0, -body["upper_arm"], 0.0))
-		var hand := Node3D.new()
-		hand.name = "hand_%s" % tag
-		hand.position = Vector3(0.0, -body["forearm"], 0.0)
-		elbow.add_child(hand)
-		if side > 0.0:
-			hand_l = hand
-		else:
-			hand_r = hand
+		_add_bone("wrist_%s" % tag, "elbow_%s" % tag,
+			Vector3(0.0, -body["forearm"], 0.0))
 
-		var hip_joint := _joint("hip_%s" % tag, hips,
-			Vector3(body["hip_half"] * side, 0.0, 0.0))
-		var knee := _joint("knee_%s" % tag, hip_joint, Vector3(0.0, -body["thigh"], 0.0))
-		_joint("ankle_%s" % tag, knee, Vector3(0.0, -body["shin"], 0.0))
+		_add_bone("hip_%s" % tag, "hips", Vector3(body["hip_half"] * side, 0.0, 0.0))
+		_add_bone("knee_%s" % tag, "hip_%s" % tag, Vector3(0.0, -body["thigh"], 0.0))
+		_add_bone("ankle_%s" % tag, "knee_%s" % tag, Vector3(0.0, -body["shin"], 0.0))
 
 
-func _build_geometry(player: Dictionary, team: Dictionary, host: Node,
+func _add_bone(bone_name: String, parent: Variant, offset: Vector3) -> int:
+	var index := _skeleton.add_bone(bone_name)
+	_bones[bone_name] = index
+	if typeof(parent) == TYPE_STRING:
+		_skeleton.set_bone_parent(index, int(_bones[parent]))
+	_skeleton.set_bone_rest(index, Transform3D(Basis.IDENTITY, offset))
+	_skeleton.set_bone_pose_position(index, offset)
+	return index
+
+
+func _bone(bone_name: String) -> int:
+	return int(_bones.get(bone_name, 0))
+
+
+func _attach_to_bone(node_name: String, bone_name: String,
+		offset: Vector3) -> Node3D:
+	var attachment := BoneAttachment3D.new()
+	attachment.name = node_name
+	attachment.bone_name = bone_name
+	attachment.bone_idx = _bone(bone_name)
+	_skeleton.add_child(attachment)
+	var anchor := Node3D.new()
+	anchor.name = "Anchor"
+	anchor.position = offset
+	attachment.add_child(anchor)
+	return anchor
+
+
+# --- surfaces -------------------------------------------------------------
+
+func _build_surfaces(player: Dictionary, team: Dictionary, host: Node,
 		body: Dictionary) -> void:
+	var kit := _materials(player, team)
+	_add_surface(_build_body_surface(body), kit["skin"])
+	_add_surface(_build_jersey_surface(body), kit["jersey"])
+	_add_surface(_build_shorts_surface(body), kit["shorts"])
+	_add_surface(_build_shoe_surface(body), kit["shoe"])
+	_add_surface(_build_sole_surface(body), kit["sole"])
+	_add_face(kit, body)
+	_add_hair(kit, body, int(player["hair"]))
+	_add_number(player, team, host, body)
+
+
+func _add_surface(mesh: ArrayMesh, material: Material) -> MeshInstance3D:
+	if mesh.get_surface_count() == 0:
+		return null
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.material_override = material
+	_skeleton.add_child(instance)
+	# Set after entering the tree so the path resolves, and bind the skin the
+	# skeleton itself generates from its rest pose.
+	instance.skeleton = instance.get_path_to(_skeleton)
+	instance.skin = _skeleton.create_skin_from_rest_transforms()
+	return instance
+
+
+func _build_body_surface(body: Dictionary) -> ArrayMesh:
 	var h: float = body["h"]
 	var bulk: float = body["bulk"]
 	var torso: float = body["torso"]
-	var shoulder_half: float = body["shoulder_half"]
-	var hip_half: float = body["hip_half"]
-	var kit := _materials(player, team)
+	var loft := BodyMesh.new()
+	loft.begin()
 
-	var hips: Node3D = joints["hips"]
-	_segment(hips, kit["shorts"], hip_half * 1.30 * bulk, hip_half * 1.24 * bulk,
-		0.095 * h, 0.80, Vector3(0.0, -0.020 * h, 0.0), false, false)
+	# Trunk: pelvis, a waist that pulls in, then a chest that flares out.
+	var hips_y: float = body["hip_y"]
+	loft.chain(Vector3(0.0, hips_y - 0.052 * h, 0.0),
+		Vector3(0.0, hips_y + torso * 0.32, 0.0),
+		_bone("hips"), _bone("spine"), [
+			BodyMesh.station(0.0, body["r_pelvis"], 0.76),
+			BodyMesh.station(0.45, body["r_hip"], 0.76),
+			BodyMesh.station(1.0, body["r_waist"], 0.74),
+		])
+	loft.chain(Vector3(0.0, hips_y + torso * 0.32, 0.0),
+		Vector3(0.0, hips_y + torso * 0.66, 0.0),
+		_bone("spine"), _bone("chest"), [
+			BodyMesh.station(0.30, body["r_ribs"], 0.74),
+			BodyMesh.station(1.0, body["r_chest"], 0.74),
+		])
+	loft.chain(Vector3(0.0, hips_y + torso * 0.66, 0.0),
+		Vector3(0.0, hips_y + torso, 0.0),
+		_bone("chest"), _bone("neck"), [
+			BodyMesh.station(0.35, body["r_shoulders"], 0.74),
+			BodyMesh.station(0.85, body["r_chest"], 0.72),
+			BodyMesh.station(1.0, body["r_collar"], 0.82),
+		], 0.9)
+	# Neck.
+	loft.chain(Vector3(0.0, hips_y + torso, 0.0),
+		Vector3(0.0, hips_y + torso + body["neck"], 0.0),
+		_bone("neck"), _bone("head"), [
+			BodyMesh.station(0.0, 0.044 * h, 0.95),
+			BodyMesh.station(1.0, 0.040 * h, 0.95),
+		])
+	loft.cut()
 
-	# One continuous torso. Two stacked cylinders leave a lip across the jersey
-	# where their radii meet.
-	var spine: Node3D = joints["spine"]
-	_segment(spine, kit["jersey"], hip_half * 1.24 * bulk, shoulder_half * 1.00 * bulk,
-		torso * 0.98, 0.62, Vector3(0.0, torso * 0.49, 0.0), true, false)
-
-	var chest: Node3D = joints["chest"]
-	# Trapezius: a flattened mass across the shoulder line. A full sphere here
-	# has the radius of half a shoulder span and swallows the neck.
-	var yoke := _ball(chest, kit["jersey"], shoulder_half * 0.78 * bulk,
-		Vector3(0.0, torso * 0.30, 0.0))
-	yoke.scale = Vector3(1.30, 0.42, 0.72)
-	_ring(chest, kit["trim"], shoulder_half * 0.44, 0.012 * h,
-		Vector3(0.0, torso * 0.375, 0.0), 0.70)
-	_add_number(chest, player, team, host, torso, shoulder_half)
-
-	var head_joint: Node3D = joints["head"]
-	_segment(head_joint, kit["skin"], 0.042 * h, 0.038 * h, body["neck"] * 1.5, 1.0,
-		Vector3(0.0, body["neck"] * 0.55, 0.0), false, false)
-	_add_head(head_joint, kit, body["head_radius"], body["neck"], int(player["hair"]))
-
-	for side in [-1.0, 1.0]:
+	for side in [1.0, -1.0]:
 		var tag := "l" if side > 0.0 else "r"
-		_dress_arm(kit, tag, side, body)
-		_dress_leg(kit, tag, body)
+		_loft_arm(loft, body, tag, side)
+		_loft_leg(loft, body, tag, side)
+
+	# Head last so it closes on its own.
+	var head_y: float = hips_y + torso + body["neck"] + body["head_radius"] * 0.86
+	loft.blob(Vector3(0.0, head_y, 0.0),
+		Vector3(body["head_radius"] * 0.92, body["head_radius"] * 1.14,
+			body["head_radius"]), _bone("head"), 10)
+	# Jaw, which is what stops the head reading as an egg.
+	loft.blob(Vector3(0.0, head_y - body["head_radius"] * 0.42,
+		-body["head_radius"] * 0.16),
+		Vector3(body["head_radius"] * 0.78, body["head_radius"] * 0.62,
+			body["head_radius"] * 0.86), _bone("head"), 6)
+	return loft.commit()
 
 
-func _materials(player: Dictionary, team: Dictionary) -> Dictionary:
-	var primary := Color(team["primary"])
-	var secondary := Color(team["secondary"])
-	var accent := Color(team["accent"])
-	var jersey := Materials.flat(primary, 0.88)
-	# A little sheen difference is what separates fabric from skin.
-	jersey.metallic_specular = 0.25
-	var shorts := Materials.flat(primary.lerp(accent, 0.35), 0.90)
-	shorts.metallic_specular = 0.25
-	return {
-		"skin": Materials.skin(int(player["skin"])),
-		"jersey": jersey,
-		"shorts": shorts,
-		"trim": Materials.flat(secondary, 0.7),
-		"shoe": Materials.flat(secondary.lerp(Color.WHITE, 0.25), 0.45),
-		"shoe_accent": Materials.flat(primary, 0.5),
-		"sole": Materials.flat(Color(0.94, 0.94, 0.92), 0.55),
-		"hair": Materials.flat(Color(0.07, 0.055, 0.05), 0.94),
-		"eye": Materials.flat(Color(0.08, 0.07, 0.07), 0.25),
-		"sclera": Materials.flat(Color(0.93, 0.92, 0.90), 0.35),
-		"mouth": Materials.flat(Color(0.32, 0.20, 0.19), 0.6),
-	}
-
-
-func _dress_arm(kit: Dictionary, tag: String, side: float, body: Dictionary) -> void:
+func _loft_arm(loft: BodyMesh, body: Dictionary, tag: String, side: float) -> void:
 	var h: float = body["h"]
 	var bulk: float = body["bulk"]
-	var upper_arm: float = body["upper_arm"]
-	var forearm: float = body["forearm"]
+	var shoulder := Vector3(body["shoulder_half"] * side,
+		body["hip_y"] + body["torso"], 0.0)
+	var elbow := shoulder + Vector3(0.0, -body["upper_arm"], 0.0)
+	var wrist := elbow + Vector3(0.0, -body["forearm"], 0.0)
 
-	var shoulder: Node3D = joints["shoulder_%s" % tag]
-	var deltoid := _ball(shoulder, kit["jersey"], 0.034 * h * bulk,
-		Vector3(0.0, -0.014 * h, 0.0))
-	deltoid.scale = Vector3(0.98, 1.10, 0.92)
-	# No skin cap at the top: the jersey deltoid already closes the shoulder,
-	# and a sphere there pokes through the sleeve.
-	_segment(shoulder, kit["skin"], 0.036 * h * bulk, 0.031 * h, upper_arm, 1.0,
-		Vector3(0.0, -upper_arm * 0.5, 0.0), false, false)
-	# Sleeve, sitting proud of the arm so it looks like cloth over muscle.
-	_segment(shoulder, kit["jersey"], 0.038 * h * bulk, 0.035 * h * bulk,
-		upper_arm * 0.34, 0.96, Vector3(0.0, -upper_arm * 0.17, 0.0), false, false)
+	loft.cut()
+	# Deltoid, bicep taper, then the elbow.
+	loft.chain(shoulder + Vector3(0.0, 0.030 * h, 0.0), elbow,
+		_bone("shoulder_%s" % tag), _bone("elbow_%s" % tag), [
+			BodyMesh.station(0.0, 0.043 * h * bulk, 1.0),
+			BodyMesh.station(0.16, 0.050 * h * bulk, 1.0),
+			BodyMesh.station(0.45, 0.041 * h * bulk, 1.0),
+			BodyMesh.station(0.80, 0.033 * h, 1.0),
+			BodyMesh.station(1.0, 0.030 * h, 1.0),
+		])
+	loft.chain(elbow, wrist, _bone("elbow_%s" % tag), _bone("wrist_%s" % tag), [
+		BodyMesh.station(0.0, 0.031 * h, 1.0),
+		BodyMesh.station(0.24, 0.034 * h * bulk, 1.0),
+		BodyMesh.station(0.70, 0.025 * h, 1.0),
+		BodyMesh.station(1.0, 0.021 * h, 1.0),
+	])
+	loft.cut()
 
-	var elbow: Node3D = joints["elbow_%s" % tag]
-	_ball(elbow, kit["skin"], 0.034 * h, Vector3.ZERO)
-	_segment(elbow, kit["skin"], 0.033 * h, 0.027 * h, forearm, 1.0,
-		Vector3(0.0, -forearm * 0.5, 0.0), false, true)
-	_add_hand(hand_l if tag == "l" else hand_r, kit["skin"], h, side)
+	# Hand: a flattened blob plus a finger block, deliberately a little large.
+	var hand_centre := wrist + Vector3(0.0, -body["hand"] * 0.34, 0.0)
+	loft.blob(hand_centre, Vector3(0.034 * h, 0.042 * h, 0.017 * h),
+		_bone("wrist_%s" % tag), 6)
+	loft.blob(wrist + Vector3(0.0, -body["hand"] * 0.78, -0.004 * h),
+		Vector3(0.030 * h, 0.038 * h, 0.015 * h), _bone("wrist_%s" % tag), 6)
+	loft.blob(wrist + Vector3(side * 0.030 * h, -body["hand"] * 0.36, 0.008 * h),
+		Vector3(0.014 * h, 0.022 * h, 0.013 * h), _bone("wrist_%s" % tag), 5)
 
 
-func _dress_leg(kit: Dictionary, tag: String, body: Dictionary) -> void:
+func _loft_leg(loft: BodyMesh, body: Dictionary, tag: String, side: float) -> void:
 	var h: float = body["h"]
 	var bulk: float = body["bulk"]
-	var thigh: float = body["thigh"]
-	var shin: float = body["shin"]
+	var hip := Vector3(body["hip_half"] * side, body["hip_y"], 0.0)
+	var knee := hip + Vector3(0.0, -body["thigh"], 0.0)
+	var ankle := knee + Vector3(0.0, -body["shin"], 0.0)
 
-	var hip_joint: Node3D = joints["hip_%s" % tag]
-	_segment(hip_joint, kit["skin"], 0.055 * h * bulk, 0.040 * h, thigh, 0.94,
-		Vector3(0.0, -thigh * 0.5, 0.0), true, true)
-	# Shorts hang off the thigh so they swing with the leg. Long and slightly
-	# tapered reads as basketball kit; short and flared reads as a skirt.
-	_segment(hip_joint, kit["shorts"], 0.069 * h * bulk, 0.062 * h * bulk,
-		thigh * 0.74, 0.90, Vector3(0.0, -thigh * 0.33, 0.0), false, false)
-	_ring(hip_joint, kit["trim"], 0.062 * h * bulk, 0.009 * h,
-		Vector3(0.0, -thigh * 0.70, 0.0), 0.90)
-
-	var knee: Node3D = joints["knee_%s" % tag]
-	_ball(knee, kit["skin"], 0.040 * h, Vector3.ZERO)
-	_segment(knee, kit["skin"], 0.040 * h, 0.028 * h, shin, 0.95,
-		Vector3(0.0, -shin * 0.5, 0.0), false, true)
-
-	_add_shoe(joints["ankle_%s" % tag], kit, h, body["ankle_y"])
-
-
-func _add_hand(hand: Node3D, skin: Material, h: float, side: float) -> void:
-	# Slightly oversized, the way a stylised athlete reads. Palm, finger block
-	# and thumb: three shapes is enough to catch a ball convincingly.
-	var palm := _ball(hand, skin, 0.040 * h, Vector3(0.0, -0.030 * h, 0.0))
-	palm.scale = Vector3(0.92, 1.10, 0.52)
-	if _detail == 0:
-		return
-	var fingers := _ball(hand, skin, 0.034 * h, Vector3(0.0, -0.078 * h, -0.004 * h))
-	fingers.scale = Vector3(0.94, 1.22, 0.46)
-	var thumb := _ball(hand, skin, 0.020 * h, Vector3(side * 0.032 * h, -0.040 * h, 0.0))
-	thumb.scale = Vector3(0.8, 1.5, 0.7)
-	thumb.rotation.z = -side * 0.5
+	loft.cut()
+	loft.chain(hip + Vector3(0.0, 0.035 * h, 0.0), knee,
+		_bone("hip_%s" % tag), _bone("knee_%s" % tag), [
+			BodyMesh.station(0.0, 0.062 * h * bulk, 0.94),
+			BodyMesh.station(0.22, 0.068 * h * bulk, 0.94),
+			BodyMesh.station(0.60, 0.057 * h * bulk, 0.94),
+			BodyMesh.station(0.88, 0.046 * h, 0.96),
+			BodyMesh.station(1.0, 0.043 * h, 0.96),
+		])
+	# Calf sits high and behind, which is what gives the leg its shape.
+	loft.chain(knee, ankle, _bone("knee_%s" % tag), _bone("ankle_%s" % tag), [
+		BodyMesh.station(0.0, 0.044 * h, 0.96),
+		BodyMesh.station(0.22, 0.052 * h * bulk, 1.0),
+		BodyMesh.station(0.58, 0.038 * h, 0.98),
+		BodyMesh.station(0.88, 0.028 * h, 0.96),
+		BodyMesh.station(1.0, 0.026 * h, 0.96),
+	])
+	loft.cut()
 
 
-func _add_shoe(ankle: Node3D, kit: Dictionary, h: float, ankle_y: float) -> void:
-	var upper := _ball(ankle, kit["shoe"], 0.046 * h,
-		Vector3(0.0, -ankle_y * 0.26, -0.026 * h))
-	upper.scale = Vector3(0.76, 0.70, 1.58)
-	var collar := _ball(ankle, kit["shoe"], 0.036 * h, Vector3(0.0, 0.0, 0.008 * h))
-	collar.scale = Vector3(0.84, 0.82, 0.88)
-	_slab(ankle, kit["sole"], Vector3(0.066 * h, 0.016 * h, 0.152 * h),
-		Vector3(0.0, -ankle_y * 0.80, -0.026 * h))
-	if _detail == 0:
-		return
-	_slab(ankle, kit["shoe_accent"], Vector3(0.070 * h, 0.009 * h, 0.080 * h),
-		Vector3(0.0, -ankle_y * 0.44, -0.040 * h))
+func _build_jersey_surface(body: Dictionary) -> ArrayMesh:
+	var h: float = body["h"]
+	var torso: float = body["torso"]
+	var hips_y: float = body["hip_y"]
+	var kit: float = body["kit"]
+	var loft := BodyMesh.new()
+	loft.begin()
+
+	# The same cross-sections as the trunk, pushed out by the kit thickness.
+	loft.chain(Vector3(0.0, hips_y - 0.070 * h, 0.0),
+		Vector3(0.0, hips_y + torso * 0.32, 0.0),
+		_bone("hips"), _bone("spine"), [
+			BodyMesh.station(0.0, body["r_hip"] + kit, 0.80),
+			BodyMesh.station(1.0, body["r_waist"] + kit, 0.78),
+		])
+	loft.chain(Vector3(0.0, hips_y + torso * 0.32, 0.0),
+		Vector3(0.0, hips_y + torso * 0.66, 0.0),
+		_bone("spine"), _bone("chest"), [
+			BodyMesh.station(0.30, body["r_ribs"] + kit, 0.78),
+			BodyMesh.station(1.0, body["r_chest"] + kit, 0.78),
+		])
+	loft.chain(Vector3(0.0, hips_y + torso * 0.66, 0.0),
+		Vector3(0.0, hips_y + torso * 0.97, 0.0),
+		_bone("chest"), _bone("neck"), [
+			BodyMesh.station(0.35, body["r_shoulders"] + kit, 0.78),
+			BodyMesh.station(0.88, body["r_chest"] + kit * 0.6, 0.76),
+			BodyMesh.station(1.0, body["r_collar"] + kit * 0.4, 0.86),
+		], 0.9)
+	loft.cut()
+
+	# Short sleeves, cut off above the elbow.
+	for side in [1.0, -1.0]:
+		var tag := "l" if side > 0.0 else "r"
+		var shoulder := Vector3(body["shoulder_half"] * side, hips_y + torso, 0.0)
+		var elbow := shoulder + Vector3(0.0, -body["upper_arm"], 0.0)
+		loft.chain(shoulder + Vector3(0.0, 0.012 * h, 0.0), elbow,
+			_bone("shoulder_%s" % tag), _bone("elbow_%s" % tag), [
+				BodyMesh.station(0.0, 0.047 * h * body["bulk"] + kit * 0.5, 1.0),
+				BodyMesh.station(0.20, 0.048 * h * body["bulk"] + kit * 0.5, 1.0),
+				BodyMesh.station(0.44, 0.042 * h * body["bulk"] + kit * 0.4, 1.0),
+			], 0.95)
+		loft.cut()
+	return loft.commit()
 
 
-func _add_head(head_joint: Node3D, kit: Dictionary, radius: float, neck: float,
-		style: int) -> void:
-	var base := neck + radius * 0.78
-	var skull := _ball(head_joint, kit["skin"], radius, Vector3(0.0, base, 0.0))
-	skull.scale = Vector3(0.93, 1.12, 1.00)
-	# Jaw, which is what keeps the head from reading as an egg.
-	var jaw := _ball(head_joint, kit["skin"], radius * 0.72,
-		Vector3(0.0, base - radius * 0.30, -radius * 0.18))
-	jaw.scale = Vector3(0.92, 0.86, 1.02)
-	_add_face(head_joint, kit, radius, base)
-	_add_hair(head_joint, kit["hair"], radius, base, style)
+func _build_shorts_surface(body: Dictionary) -> ArrayMesh:
+	var h: float = body["h"]
+	var bulk: float = body["bulk"]
+	var kit: float = body["kit"]
+	var loft := BodyMesh.new()
+	loft.begin()
+
+	loft.chain(Vector3(0.0, body["hip_y"] + 0.062 * h, 0.0),
+		Vector3(0.0, body["hip_y"] - 0.042 * h, 0.0),
+		_bone("hips"), -1, [
+			BodyMesh.station(0.0, body["r_waist"] + kit * 2.0, 0.82),
+			BodyMesh.station(0.55, body["r_hip"] + kit * 2.2, 0.84),
+			BodyMesh.station(1.0, body["r_hip"] + kit * 2.2, 0.84),
+		])
+	loft.cut()
+
+	# Down to just above the knee, tapering rather than flaring.
+	for side in [1.0, -1.0]:
+		var tag := "l" if side > 0.0 else "r"
+		var hip := Vector3(body["hip_half"] * side, body["hip_y"], 0.0)
+		var knee := hip + Vector3(0.0, -body["thigh"], 0.0)
+		loft.chain(hip + Vector3(0.0, 0.012 * h, 0.0), knee, _bone("hip_%s" % tag),
+			_bone("knee_%s" % tag), [
+				BodyMesh.station(0.0, 0.076 * h * bulk + kit * 1.6, 0.96),
+				BodyMesh.station(0.40, 0.070 * h * bulk + kit, 0.98),
+				BodyMesh.station(0.74, 0.062 * h * bulk + kit * 0.8, 0.98),
+				BodyMesh.station(0.78, 0.060 * h * bulk + kit * 0.6, 0.98),
+			], 0.95)
+		loft.cut()
+	return loft.commit()
 
 
-func _add_face(head_joint: Node3D, kit: Dictionary, radius: float, base: float) -> void:
+func _build_shoe_surface(body: Dictionary) -> ArrayMesh:
+	var h: float = body["h"]
+	var loft := BodyMesh.new()
+	loft.begin()
+	for side in [1.0, -1.0]:
+		var tag := "l" if side > 0.0 else "r"
+		var ankle := Vector3(body["hip_half"] * side,
+			body["hip_y"] - body["thigh"] - body["shin"], 0.0)
+		loft.blob(ankle + Vector3(0.0, -0.014 * h, -0.038 * h),
+			Vector3(0.034 * h, 0.026 * h, 0.098 * h), _bone("ankle_%s" % tag), 6)
+		loft.blob(ankle + Vector3(0.0, 0.010 * h, 0.002 * h),
+			Vector3(0.031 * h, 0.030 * h, 0.036 * h), _bone("ankle_%s" % tag), 5)
+	return loft.commit()
+
+
+func _build_sole_surface(body: Dictionary) -> ArrayMesh:
+	var h: float = body["h"]
+	var loft := BodyMesh.new()
+	loft.begin()
+	for side in [1.0, -1.0]:
+		var tag := "l" if side > 0.0 else "r"
+		var ankle := Vector3(body["hip_half"] * side,
+			body["hip_y"] - body["thigh"] - body["shin"], 0.0)
+		loft.blob(ankle + Vector3(0.0, -0.032 * h, -0.038 * h),
+			Vector3(0.036 * h, 0.010 * h, 0.100 * h), _bone("ankle_%s" % tag), 4)
+	return loft.commit()
+
+
+func _add_face(kit: Dictionary, body: Dictionary) -> void:
+	var radius: float = body["head_radius"]
+	var head_y: float = body["hip_y"] + body["torso"] + body["neck"] + radius * 0.86
+	var bone := _bone("head")
+
+	var eyes := BodyMesh.new()
+	eyes.begin()
+	var whites := BodyMesh.new()
+	whites.begin()
+	var brows := BodyMesh.new()
+	brows.begin()
 	for side in [-1.0, 1.0]:
-		var white := _ball(head_joint, kit["sclera"], radius * 0.165,
-			Vector3(side * radius * 0.34, base + radius * 0.14, -radius * 0.80))
-		white.scale = Vector3(1.15, 0.85, 0.45)
-		var pupil := _ball(head_joint, kit["eye"], radius * 0.095,
-			Vector3(side * radius * 0.34, base + radius * 0.14, -radius * 0.87))
-		pupil.scale = Vector3(1.0, 1.05, 0.45)
-		if _detail == 0:
-			continue
-		var brow := _slab(head_joint, kit["hair"],
-			Vector3(radius * 0.36, radius * 0.085, radius * 0.10),
-			Vector3(side * radius * 0.34, base + radius * 0.36, -radius * 0.76))
-		brow.rotation.z = -side * 0.18
+		var eye_centre := Vector3(side * radius * 0.35, head_y + radius * 0.06,
+			-radius * 0.79)
+		whites.blob(eye_centre, Vector3(radius * 0.21, radius * 0.15,
+			radius * 0.08), bone, 5)
+		eyes.blob(eye_centre + Vector3(0.0, 0.0, -radius * 0.06),
+			Vector3(radius * 0.105, radius * 0.115, radius * 0.06), bone, 5)
+		if _detail > 0:
+			brows.blob(Vector3(side * radius * 0.35, head_y + radius * 0.26,
+				-radius * 0.75), Vector3(radius * 0.24, radius * 0.055,
+				radius * 0.08), bone, 4)
+	_add_surface(whites.commit(), kit["sclera"])
+	_add_surface(eyes.commit(), kit["eye"])
 	if _detail == 0:
 		return
-	var nose := _ball(head_joint, kit["skin"], radius * 0.17,
-		Vector3(0.0, base - radius * 0.06, -radius * 0.84))
-	nose.scale = Vector3(0.75, 1.15, 0.85)
-	_slab(head_joint, kit["mouth"], Vector3(radius * 0.44, radius * 0.10, radius * 0.06),
-		Vector3(0.0, base - radius * 0.42, -radius * 0.78))
+	_add_surface(brows.commit(), kit["hair"])
+
+	var features := BodyMesh.new()
+	features.begin()
+	features.blob(Vector3(0.0, head_y - radius * 0.06, -radius * 0.84),
+		Vector3(radius * 0.13, radius * 0.19, radius * 0.13), bone, 5)
+	for side in [-1.0, 1.0]:
+		features.blob(Vector3(side * radius * 0.92, head_y + radius * 0.04, 0.0),
+			Vector3(radius * 0.07, radius * 0.15, radius * 0.11), bone, 5)
+	_add_surface(features.commit(), kit["skin"])
+
+	var mouth := BodyMesh.new()
+	mouth.begin()
+	mouth.blob(Vector3(0.0, head_y - radius * 0.44, -radius * 0.76),
+		Vector3(radius * 0.21, radius * 0.045, radius * 0.06), bone, 4)
+	_add_surface(mouth.commit(), kit["mouth"])
 
 
-func _add_hair(head_joint: Node3D, material: Material, radius: float, base: float,
-		style: int) -> void:
-	# Every style starts from a close crop following the skull and adds to it.
-	# Nothing is allowed to sit in front of the face.
-	var cap := _ball(head_joint, material, radius * 1.045,
-		Vector3(0.0, base + radius * 0.18, radius * 0.03))
-	cap.scale = Vector3(1.0, 0.90, 1.0)
+func _add_hair(kit: Dictionary, body: Dictionary, style: int) -> void:
+	var radius: float = body["head_radius"]
+	var head_y: float = body["hip_y"] + body["torso"] + body["neck"] + radius * 0.86
+	var bone := _bone("head")
+	var hair := BodyMesh.new()
+	hair.begin()
+
+	# Every style is a crop following the skull, then something added to it.
+	# Nothing sits in front of the face.
+	var crop := Vector3(radius * 0.99, radius * 0.86, radius * 1.03)
+	var crop_centre := Vector3(0.0, head_y + radius * 0.38, radius * 0.12)
 	match style:
 		1:
-			cap.scale = Vector3(1.01, 0.60, 0.98)
-			cap.position = Vector3(0.0, base + radius * 0.34, radius * 0.08)
+			crop = Vector3(radius * 0.97, radius * 0.60, radius * 1.00)
+			crop_centre.y = head_y + radius * 0.52
 		2:
-			cap.scale = Vector3(1.26, 1.12, 1.24)
-			cap.position = Vector3(0.0, base + radius * 0.16, radius * 0.02)
-		3:
-			# Forehead, above the brows. Any lower and it reads as a blindfold.
-			cap.scale = Vector3(1.01, 0.72, 0.98)
-			cap.position = Vector3(0.0, base + radius * 0.30, radius * 0.08)
-			_ring(head_joint, Materials.flat(Color(0.94, 0.94, 0.92), 0.8),
-				radius * 0.97, radius * 0.085,
-				Vector3(0.0, base + radius * 0.52, 0.0), 1.0)
+			crop = Vector3(radius * 1.22, radius * 1.06, radius * 1.22)
+			crop_centre.y = head_y + radius * 0.34
 		4:
-			cap.scale = Vector3(1.06, 1.06, 1.02)
-			_slab(head_joint, material,
-				Vector3(radius * 1.66, radius * 0.28, radius * 1.60),
-				Vector3(0.0, base + radius * 0.86, radius * 0.06))
+			crop = Vector3(radius * 1.03, radius * 0.94, radius * 1.04)
+	hair.blob(crop_centre, crop, bone, 8)
+	if style == 4:
+		hair.blob(Vector3(0.0, head_y + radius * 0.92, radius * 0.06),
+			Vector3(radius * 0.92, radius * 0.16, radius * 0.90), bone, 4)
+	_add_surface(hair.commit(), kit["hair"])
+
+	if style == 3:
+		var band := BodyMesh.new()
+		band.begin()
+		band.blob(Vector3(0.0, head_y + radius * 0.30, 0.0),
+			Vector3(radius * 1.02, radius * 0.15, radius * 1.06), bone, 5)
+		_add_surface(band.commit(), kit["band"])
 
 
-func _joint(key: String, parent: Node3D, offset: Vector3) -> Node3D:
-	var node := Node3D.new()
-	node.name = key
-	node.position = offset
-	parent.add_child(node)
-	joints[key] = node
-	return node
-
-
-# Tapered segment. `depth` squashes it front to back; `cap_top`/`cap_bottom`
-# weld the ends with spheres matching the segment radius there.
-func _segment(parent: Node3D, material: Material, bottom: float, top: float,
-		length: float, depth: float, offset: Vector3,
-		cap_bottom: bool, cap_top: bool) -> void:
-	var mesh := MeshInstance3D.new()
-	var cylinder := CylinderMesh.new()
-	cylinder.bottom_radius = bottom
-	cylinder.top_radius = top
-	cylinder.height = length
-	cylinder.radial_segments = SEGMENTS
-	cylinder.rings = 1
-	mesh.mesh = cylinder
-	mesh.material_override = material
-	mesh.position = offset
-	mesh.scale = Vector3(1.0, 1.0, depth)
-	parent.add_child(mesh)
-
-	if cap_bottom:
-		var low := _ball(parent, material, bottom, offset - Vector3(0.0, length * 0.5, 0.0))
-		low.scale = Vector3(1.0, 0.9, depth)
-	if cap_top:
-		var high := _ball(parent, material, top, offset + Vector3(0.0, length * 0.5, 0.0))
-		high.scale = Vector3(1.0, 0.9, depth)
-
-
-func _ball(parent: Node3D, material: Material, radius: float,
-		offset: Vector3) -> MeshInstance3D:
-	var mesh := MeshInstance3D.new()
-	var sphere := SphereMesh.new()
-	sphere.radius = radius
-	sphere.height = radius * 2.0
-	sphere.radial_segments = SEGMENTS
-	sphere.rings = SPHERE_RINGS
-	mesh.mesh = sphere
-	mesh.material_override = material
-	mesh.position = offset
-	parent.add_child(mesh)
-	return mesh
-
-
-func _ring(parent: Node3D, material: Material, radius: float, thickness: float,
-		offset: Vector3, depth: float) -> MeshInstance3D:
-	var mesh := MeshInstance3D.new()
-	var torus := TorusMesh.new()
-	torus.inner_radius = maxf(radius - thickness, 0.001)
-	torus.outer_radius = radius + thickness
-	torus.rings = SEGMENTS
-	torus.ring_segments = 6
-	mesh.mesh = torus
-	mesh.material_override = material
-	mesh.position = offset
-	mesh.scale = Vector3(1.0, 1.0, depth)
-	parent.add_child(mesh)
-	return mesh
-
-
-func _slab(parent: Node3D, material: Material, size: Vector3,
-		offset: Vector3) -> MeshInstance3D:
-	var mesh := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = size
-	mesh.mesh = box
-	mesh.material_override = material
-	mesh.position = offset
-	parent.add_child(mesh)
-	return mesh
-
-
-func _add_number(chest: Node3D, player: Dictionary, team: Dictionary, host: Node,
-		torso: float, shoulder_half: float) -> void:
+func _add_number(player: Dictionary, team: Dictionary, host: Node,
+		body: Dictionary) -> void:
 	var texture := JerseyNumbers.atlas(host)
-	var radius := shoulder_half * 0.99
-	# Back number is large, chest number small, both wrapped onto the torso so
-	# they sit on the shirt instead of floating in front of it.
-	_number_patch(chest, texture, team, int(player["num"]), radius, 1.85,
-		torso * 0.40, 0.0, torso * 0.02)
-	_number_patch(chest, texture, team, int(player["num"]), radius, 1.15,
-		torso * 0.24, PI, torso * 0.10)
+	var torso: float = body["torso"]
+	var radius: float = body["r_chest"] + body["kit"] * 1.6
+	var chest_y: float = body["hip_y"] + torso * 0.72
+	_number_patch(texture, team, int(player["num"]), radius, 1.75,
+		torso * 0.26, 0.0, chest_y)
+	_number_patch(texture, team, int(player["num"]), radius, 1.05,
+		torso * 0.15, PI, chest_y + torso * 0.10)
 
 
-func _number_patch(chest: Node3D, texture: Texture2D, team: Dictionary, number: int,
+# Wrapped onto the chest so the digits sit on the shirt rather than floating in
+# front of it. Bound to the chest bone so it moves with the torso.
+func _number_patch(texture: Texture2D, team: Dictionary, number: int,
 		radius: float, arc: float, patch_height: float, centre_angle: float,
 		y: float) -> void:
 	const STEPS := 10
-	const DEPTH := 0.62
-	# Sit a hair proud of the shirt so it never z-fights the torso.
-	var r := radius * 1.015
-	var vertices := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var indices := PackedInt32Array()
+	const DEPTH := 0.76
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var bone := PackedInt32Array([_bone("chest"), 0, 0, 0])
+	var weight := PackedFloat32Array([1.0, 0.0, 0.0, 0.0])
+
 	for i in STEPS + 1:
 		var t := float(i) / float(STEPS)
 		var angle := centre_angle + (t - 0.5) * arc
-		var outward := Vector3(sin(angle), 0.0, cos(angle) * DEPTH).normalized()
-		var ring := Vector3(sin(angle) * r, 0.0, cos(angle) * r * DEPTH)
-		vertices.append(ring + Vector3(0.0, y + patch_height * 0.5, 0.0))
-		vertices.append(ring + Vector3(0.0, y - patch_height * 0.5, 0.0))
-		normals.append(outward)
-		normals.append(outward)
-		# Mirror U on the chest patch so the digits read the right way round.
-		var u := 1.0 - t if centre_angle == 0.0 else t
-		uvs.append(Vector2(u, 0.0))
-		uvs.append(Vector2(u, 1.0))
+		var ring := Vector3(sin(angle) * radius, 0.0, cos(angle) * radius * DEPTH)
+		var u := 1.0 - t if is_zero_approx(centre_angle) else t
+		for edge in 2:
+			tool.set_uv(Vector2(u, float(edge)))
+			tool.set_bones(bone)
+			tool.set_weights(weight)
+			tool.add_vertex(ring + Vector3(0.0,
+				y + patch_height * (0.5 - float(edge)), 0.0))
 	for i in STEPS:
 		var base := i * 2
-		indices.append_array([base, base + 1, base + 2, base + 1, base + 3, base + 2])
-
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		for index in [base, base + 1, base + 2, base + 1, base + 3, base + 2]:
+			tool.add_index(index)
+	tool.generate_normals()
 
 	var material := StandardMaterial3D.new()
 	material.albedo_texture = texture
@@ -458,13 +544,39 @@ func _number_patch(chest: Node3D, texture: Texture2D, team: Dictionary, number: 
 	material.uv1_offset = JerseyNumbers.uv_offset(number)
 	material.albedo_color = Color(team["secondary"])
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.roughness = 0.85
+	material.roughness = 0.9
+	_add_surface(tool.commit(), material)
 
-	var instance := MeshInstance3D.new()
-	instance.mesh = mesh
-	instance.material_override = material
-	chest.add_child(instance)
 
+func _materials(player: Dictionary, team: Dictionary) -> Dictionary:
+	var primary := Color(team["primary"])
+	var secondary := Color(team["secondary"])
+	var accent := Color(team["accent"])
+	# Kit is an open-ended shell: it has a hem, a collar and armholes. Drawing
+	# it single sided means looking straight through those openings into the
+	# body, so cloth is double sided, like real cloth.
+	var jersey := Materials.flat(primary, 0.88)
+	jersey.metallic_specular = 0.28
+	jersey.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var shorts := Materials.flat(primary.lerp(accent, 0.35), 0.90)
+	shorts.metallic_specular = 0.28
+	shorts.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return {
+		"skin": Materials.skin(int(player["skin"])),
+		"jersey": jersey,
+		"shorts": shorts,
+		"trim": Materials.flat(secondary, 0.7),
+		"shoe": Materials.flat(secondary.lerp(Color.WHITE, 0.2), 0.45),
+		"sole": Materials.flat(Color(0.95, 0.95, 0.93), 0.55),
+		"hair": Materials.flat(Color(0.07, 0.055, 0.05), 0.94),
+		"band": Materials.flat(Color(0.94, 0.94, 0.92), 0.8),
+		"eye": Materials.flat(Color(0.07, 0.06, 0.06), 0.25),
+		"sclera": Materials.flat(Color(0.93, 0.92, 0.90), 0.35),
+		"mouth": Materials.flat(Color(0.30, 0.18, 0.17), 0.6),
+	}
+
+
+# --- posing ---------------------------------------------------------------
 
 func set_target(key: String, euler: Vector3) -> void:
 	_target_pose[key] = euler
@@ -475,10 +587,18 @@ func apply(delta: float, responsiveness: float = 18.0) -> void:
 	for key in JOINTS:
 		var blended: Vector3 = (pose[key] as Vector3).lerp(_target_pose[key], weight)
 		pose[key] = blended
-		(joints[key] as Node3D).basis = Basis.from_euler(blended)
+		_skeleton.set_bone_pose_rotation(_bone(key),
+			Quaternion.from_euler(blended))
 
 
 func snap_to_target() -> void:
 	for key in JOINTS:
 		pose[key] = _target_pose[key]
-		(joints[key] as Node3D).basis = Basis.from_euler(_target_pose[key])
+		_skeleton.set_bone_pose_rotation(_bone(key),
+			Quaternion.from_euler(_target_pose[key]))
+	if OS.is_stdout_verbose():
+		var idx := _bone("shoulder_l")
+		print("snap shoulder=%s elbow=%s wrist=%s" % [
+			_skeleton.get_bone_global_pose(idx).origin,
+			_skeleton.get_bone_global_pose(_bone("elbow_l")).origin,
+			_skeleton.get_bone_global_pose(_bone("wrist_l")).origin])

@@ -43,7 +43,8 @@ the playoffs. It is not finished — see [Limitations](#limitations) and
 
 **Presentation**
 - [x] Broadcast camera plus behind, high, courtside and baseline angles
-- [x] Procedural player models with team kits, numbers, body types and skin tones
+- [x] Skinned player models on a generated skeleton: one continuous surface that
+      deforms at the joints, with team kits, numbers, body types and skin tones
 - [x] Generated arena: seating bowl, animated crowd, benches, scoreboard, banners
 - [x] Drawn-in-code UI on one design system
 
