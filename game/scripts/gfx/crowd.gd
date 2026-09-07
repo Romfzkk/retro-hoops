@@ -65,13 +65,27 @@ static func _make_multimesh(seats: Array[Transform3D], team: Dictionary,
 
 	var kit := [Color(team["primary"]), Color(team["secondary"]), Color(team["accent"])]
 	for i in seats.size():
-		mm.set_instance_transform(i, seats[i])
+		# Vary build and posture per seat. A bowl of identically sized people
+		# is what makes a crowd read as wallpaper.
+		var transform: Transform3D = seats[i]
+		var build := rng.randf_range(0.86, 1.14)
+		var standing := 1.0 if rng.randf() < 0.08 else 0.0
+		transform = transform.scaled_local(Vector3(build, build * rng.randf_range(0.94, 1.10),
+			build))
+		transform.origin.y += standing * 0.22
+		mm.set_instance_transform(i, transform)
+
 		var colour: Color
-		if rng.randf() < 0.40:
-			colour = kit[rng.randi() % kit.size()]
+		var roll := rng.randf()
+		if roll < 0.34:
+			colour = kit[rng.randi() % kit.size()].lerp(Color.BLACK, rng.randf_range(0.0, 0.3))
+		elif roll < 0.72:
+			# Most of a real crowd is in something dark and unremarkable.
+			colour = Color.from_hsv(rng.randf(), rng.randf_range(0.02, 0.22),
+				rng.randf_range(0.06, 0.30))
 		else:
-			colour = Color.from_hsv(rng.randf(), rng.randf_range(0.05, 0.45),
-				rng.randf_range(0.18, 0.62))
+			colour = Color.from_hsv(rng.randf(), rng.randf_range(0.25, 0.7),
+				rng.randf_range(0.25, 0.68))
 		mm.set_instance_color(i, colour)
 	return mm
 

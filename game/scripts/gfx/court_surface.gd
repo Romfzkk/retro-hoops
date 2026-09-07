@@ -63,9 +63,18 @@ func _draw_boards() -> void:
 	var plank_px := PLANK_WIDTH_M * PIXELS_PER_METRE
 	var y := rect.position.y
 	while y < rect.end.y:
-		var tone := 1.0 + rng.randf_range(-0.055, 0.055)
+		# Wide tone spread with the occasional much darker board, which is what
+		# a real sprung floor looks like once it has been refinished a few times.
+		var tone := 1.0 + rng.randf_range(-0.10, 0.09)
+		if rng.randf() < 0.08:
+			tone -= rng.randf_range(0.06, 0.14)
 		var strip := Rect2(rect.position.x, y, rect.size.x, minf(plank_px, rect.end.y - y))
 		draw_rect(strip, Color(base.r * tone, base.g * tone, base.b * tone))
+		# Grain: a couple of faint lengthwise streaks per board.
+		for streak in 2:
+			var streak_y := strip.position.y + rng.randf() * strip.size.y
+			draw_line(Vector2(rect.position.x, streak_y), Vector2(rect.end.x, streak_y),
+				Color(base.r, base.g, base.b, 0.10 * rng.randf()), 1.0)
 		# Boards are laid end to end, so break each row with butt joints.
 		var x := rect.position.x + rng.randf_range(0.0, 3.0) * PIXELS_PER_METRE
 		while x < rect.end.x:

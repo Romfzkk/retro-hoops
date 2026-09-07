@@ -7,7 +7,9 @@ extends RefCounted
 
 enum Action { NONE, SHOOT, PASS, DUNK, LAYUP, BLOCK, REBOUND, STEAL, CELEBRATE }
 
-const STRIDE_LENGTH := 1.55
+# Metres covered by one full cycle, which is two steps. At 1.55 the legs
+# cycled about twice as fast as the player actually moved and the feet skated.
+const STRIDE_LENGTH := 2.90
 const RUN_LEAN := 0.30
 const DEFENCE_CROUCH := 0.55
 
@@ -100,7 +102,7 @@ func _torso(gait: float) -> void:
 		forward_lean = 0.34
 	if action == Action.SHOOT:
 		forward_lean *= 0.4
-	rig.set_target("hips", Vector3(0.0, 0.0, lean.x * 0.2))
+	rig.set_target("hips", Vector3(forward_lean * 0.18, 0.0, lean.x * 0.2))
 	rig.set_target("spine", Vector3(forward_lean * 0.6, -sin(stride_phase) * 0.10 * gait,
 		lean.y * 0.15))
 	rig.set_target("chest", Vector3(forward_lean * 0.4, sin(stride_phase) * 0.16 * gait, 0.0))
