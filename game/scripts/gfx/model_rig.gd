@@ -1,14 +1,8 @@
 class_name ModelRig
 extends RefCounted
 
-# Binds an externally authored, rigged character to the joint names the animator
-# writes to, so the same procedural animation drives an artist's mesh.
-#
-# Two things stop the animator's output from being usable as-is. The animator's
-# convention is that a bone hangs down -Y and +X swings it forward; every bone
-# in a Mixamo skeleton runs along +Y in its own space instead. And the bind pose
-# is an A-pose, not an axis-aligned rest, so a pose rotation has to be applied
-# as a delta on top of the rest rather than replacing it.
+# Asset loading, normalization and the bundled texture's kit mask.
+# ModelRetarget owns the conversion between animator and imported bone axes.
 
 const ASSET := "res://art/player.fbx"
 const KIT_SHADER := "res://shaders/player_kit.gdshader"
@@ -38,6 +32,14 @@ const WRIST_BONES := {"l": "mixamorig_LeftHand", "r": "mixamorig_RightHand"}
 
 static var _scene: PackedScene
 static var _missing := false
+static var _asset_path := ASSET
+
+
+static func preview_asset(path: String) -> void:
+	assert(path.begins_with("res://"), "Import the test character into the project first")
+	_asset_path = path
+	_scene = null
+	_missing = false
 
 
 static func available() -> bool:
@@ -45,42 +47,37 @@ static func available() -> bool:
 		return false
 	if _scene != null:
 		return true
-	if not ResourceLoader.exists(ASSET):
+	if not ResourceLoader.exists(_asset_path):
 		_missing = true
+		push_error("Player asset is unavailable: " + _asset_path)
 		return false
-	_scene = ResourceLoader.load(ASSET) as PackedScene
+	_scene = ResourceLoader.load(_asset_path) as PackedScene
 	_missing = _scene == null
 	return not _missing
 
 
-## Instances the model under `parent`, scaled so it stands `height` metres.
-## Returns the skeleton, or null when the asset is not usable.
 ## Repaints the model into a team's colours. The kit is baked into the texture,
 ## so the shader classifies each texel rather than swapping a material.
-static func apply_kit(skeleton: Skeleton3D, team: Dictionary, player: Dictionary,
-		height: float) -> void:
+static func apply_kit(skeleton: Skeleton3D, team: Dictionary, player: Dictionary) -> void:
+	if _asset_path != ASSET:
+		return
 	var shader := ResourceLoader.load(KIT_SHADER) as Shader
 	if shader == null:
+		push_error("Player kit shader could not be loaded: " + KIT_SHADER)
 		return
 	const TONES := [
 		Color(0.96, 0.79, 0.67), Color(0.86, 0.66, 0.51), Color(0.72, 0.52, 0.38),
 		Color(0.55, 0.37, 0.26), Color(0.40, 0.26, 0.18), Color(0.28, 0.19, 0.13),
 	]
-	for instance: MeshInstance3D in skeleton.find_children("*", "MeshInstance3D", true, false):
+	var skin_texture := ResourceLoader.load(KIT_TEXTURE) as Texture2D
+	if skin_texture == null:
+		push_error("Player kit texture could not be loaded: " + KIT_TEXTURE)
+		return
+	var model_root: Node3D = skeleton.get_meta("model_root")
+	for instance: MeshInstance3D in model_root.find_children("*", "MeshInstance3D", true, false):
 		if instance.mesh == null:
 			continue
 		for surface in instance.mesh.get_surface_count():
-			# Always the masked copy: the imported material's own texture has no
-			# head mask in its alpha.
-			var skin_texture := ResourceLoader.load(KIT_TEXTURE) as Texture2D
-			if skin_texture == null:
-				# The importer can hand back a material with the image detached.
-				# Without a texture every texel reads as black and the whole
-				# player comes out one flat team colour.
-				skin_texture = ResourceLoader.load(KIT_TEXTURE) as Texture2D
-			if skin_texture == null:
-				push_warning("No player texture; kit colours will be flat")
-				continue
 			var material := ShaderMaterial.new()
 			material.shader = shader
 			material.set_shader_parameter("base_texture", skin_texture)
@@ -96,34 +93,88 @@ static func instantiate(parent: Node3D, height: float) -> Skeleton3D:
 		return null
 	var root := _scene.instantiate() as Node3D
 	if root == null:
+		push_error("Player asset root must be Node3D")
 		return null
-	parent.add_child(root)
 	var found := root.find_children("*", "Skeleton3D", true, false)
-	if found.is_empty():
-		push_error("%s has no skeleton" % ASSET)
-		root.queue_free()
+	if found.size() != 1:
+		push_error("Player asset must contain exactly one skeleton")
+		root.free()
 		return null
 	var skeleton: Skeleton3D = found[0]
-	# Mixamo works in centimetres and the export lands about two hundred times
-	# too small, so derive the factor from the mesh rather than hard-coding it.
-	var bounds := _model_bounds(root)
-	if bounds.size.y > 0.0001:
-		var fit := height / bounds.size.y
-		root.scale = Vector3.ONE * fit
-		# The skeleton is rooted at the hips, and the game rigs everything from
-		# the floor up. Without this the whole player stands a metre low, which
-		# reads as the feet sinking through the court.
-		root.position.y = -bounds.position.y * fit
+	var problems := validate(root, skeleton)
+	if not problems.is_empty():
+		push_error("Player asset rejected: " + "; ".join(problems))
+		root.free()
+		return null
+	# Normalize a wrapper, preserving authored transforms on every imported node.
+	var wrapper := Node3D.new()
+	wrapper.name = "CharacterModel"
+	wrapper.add_child(root)
+	var bounds := model_bounds(wrapper)
+	if bounds.size.y <= 0.0001:
+		push_error("Player asset has no measurable height")
+		wrapper.free()
+		return null
+	var fit := height / bounds.size.y
+	wrapper.scale = Vector3.ONE * fit
+	# The bundled FBX's toes and face point +Z; gameplay faces -Z.
+	wrapper.rotation.y = PI
+	wrapper.position = Basis(Vector3.UP, PI) * Vector3(-bounds.get_center().x,
+		-bounds.position.y, -bounds.get_center().z) * fit
+	parent.add_child(wrapper)
+	skeleton.set_meta("model_root", root)
 	return skeleton
 
 
-static func _model_bounds(root: Node3D) -> AABB:
+static func validate(root: Node3D, skeleton: Skeleton3D) -> PackedStringArray:
+	var problems := PackedStringArray()
+	for bone_name in BONE_NAMES.values() + WRIST_BONES.values():
+		if skeleton.find_bone(bone_name) < 0:
+			problems.append("missing bone " + bone_name)
+	var chains := {
+		"elbow_l": "shoulder_l", "elbow_r": "shoulder_r",
+		"knee_l": "hip_l", "knee_r": "hip_r",
+		"ankle_l": "knee_l", "ankle_r": "knee_r",
+	}
+	for child_key in chains:
+		var child := skeleton.find_bone(BONE_NAMES[child_key])
+		var parent := skeleton.find_bone(BONE_NAMES[chains[child_key]])
+		if child >= 0 and parent >= 0:
+			var cursor := skeleton.get_bone_parent(child)
+			while cursor >= 0 and cursor != parent:
+				cursor = skeleton.get_bone_parent(cursor)
+			if cursor != parent:
+				problems.append("invalid hierarchy for " + child_key)
+	var skinned := false
+	for instance: MeshInstance3D in root.find_children("*", "MeshInstance3D", true, false):
+		if instance.mesh == null:
+			continue
+		for surface in instance.mesh.get_surface_count():
+			var format := instance.mesh.surface_get_format(surface)
+			if format & Mesh.ARRAY_FORMAT_BONES and format & Mesh.ARRAY_FORMAT_WEIGHTS:
+				skinned = true
+	if not skinned:
+		problems.append("no skinned mesh surfaces")
+	return problems
+
+
+static func relative_transform(node: Node3D, ancestor: Node3D) -> Transform3D:
+	var result := Transform3D.IDENTITY
+	var cursor := node
+	while cursor != ancestor:
+		assert(cursor != null, "Node is not below the requested ancestor")
+		result = cursor.transform * result
+		cursor = cursor.get_parent_node_3d()
+	return result
+
+
+static func model_bounds(root: Node3D) -> AABB:
 	var box := AABB()
 	var started := false
 	for instance: MeshInstance3D in root.find_children("*", "MeshInstance3D", true, false):
 		if instance.mesh == null:
 			continue
-		var local := instance.mesh.get_aabb()
+		var local := relative_transform(instance, root) * instance.mesh.get_aabb()
 		box = local if not started else box.merge(local)
 		started = true
 	return box

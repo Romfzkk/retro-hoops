@@ -57,12 +57,9 @@ static func accuracy(player: Dictionary, distance: float, behind_arc: bool,
 	var fatigue_penalty := clampf(fatigue, 0.0, 1.0) * 0.16
 	var release := clampf(release_quality, 0.0, 1.0)
 
-	# Tuned against tools/shot_lab: an average shooter taking an average look
-	# lands near 0.50, which the accuracy-to-make curve turns into roughly 47%
-	# from the field and 40% from three.
 	var value := 0.13 + skill * 0.40 + release * 0.26
 	value -= range_penalty + contest_penalty + movement_penalty + fatigue_penalty
-	# The difficulty dial moves the AI's edge, not the player's ceiling.
+	# Shared difficulty adjustment for both teams.
 	value -= float(difficulty) * 0.012
 	return clampf(value, 0.02, 0.995)
 
@@ -98,13 +95,11 @@ static func contest_level(shooter: Vector3, shooter_height: float,
 		if flat > CONTEST_RADIUS:
 			continue
 		var closeness := 1.0 - flat / CONTEST_RADIUS
-		var height_edge := clampf((offset.y + CONTEST_HEIGHT) / CONTEST_HEIGHT, 0.0, 1.6)
+		var reach := shooter_height + 0.35
+		if defender is PlayerPawn:
+			reach = defender.rig.shoulder_height + 0.35 if defender.is_on_floor() \
+				else defender.standing_reach()
+		var height_edge := clampf((offset.y + reach - shooter_height - 0.42 \
+			+ CONTEST_HEIGHT) / CONTEST_HEIGHT, 0.0, 1.6)
 		worst = maxf(worst, closeness * height_edge)
 	return clampf(worst, 0.0, 1.0)
-
-
-# Where the ball should leave the hand: above and slightly in front of the head.
-static func release_point(pawn: Node3D, shoulder_height: float,
-		facing: Vector3) -> Vector3:
-	return pawn.global_position + Vector3.UP * (shoulder_height + 0.42) \
-		+ facing * 0.22

@@ -1,9 +1,7 @@
 class_name PlayerPawn
 extends CharacterBody3D
 
-# A single player on court. Reads a PlayerIntent, moves, and owns the ball
-# actions. Ratings map to real units - metres per second, metres of vertical -
-# so a 99 vertical actually gets a hand over the rim and a 40 does not.
+# Movement, action timing and ball releases for one player.
 
 signal shot_released(pawn: PlayerPawn, points: int, quality: float)
 signal ball_passed(pawn: PlayerPawn, target: PlayerPawn)
@@ -22,7 +20,7 @@ const IDEAL_RELEASE := Vector2(0.44, 0.86)
 const OVERCHARGE := 1.30
 ## Even a panicked release is a basketball shot, not a throw at the wall.
 const MIN_RELEASE_QUALITY := 0.30
-const GATHER_TIME := 0.16
+const RELEASE_EXTENSION := 0.08
 const STEAL_TIME := 0.42
 const STUMBLE_TIME := 0.55
 const DUNK_RANGE := 3.4
@@ -36,7 +34,6 @@ const DRIVE_SPEED := 1.2
 ## Dribbles per second, walking to sprinting.
 const DRIBBLE_RATE := Vector2(2.2, 4.1)
 const BODY_RADIUS := 0.38
-const PICKUP_RADIUS := 0.95
 const INTERCEPT_REACH := 0.85
 const INTERCEPT_BASE := 0.07
 
@@ -55,11 +52,18 @@ var rig: PlayerRig
 var animator: PlayerAnimator
 var ball_anchor: Node3D
 var stamina := 1.0
+var match_difficulty := 1
 var has_ball := false
 var actions_enabled := true
 var movement_enabled := true
 var free_throw_attempt := false
 var _took_off := false
+var _release_delay := -1.0
+var _forced_release := false
+var _queued_release := ""
+var _released_at := 0.0
+var last_release_charge := 0.0
+var last_shot_kind := "JUMPER"
 
 var state: State = State.LOCOMOTION
 var state_time := 0.0
@@ -194,12 +198,25 @@ func _physics_process(delta: float) -> void:
 		State.STUMBLE:
 			_tick_stumble(delta)
 
+	var was_grounded := is_on_floor()
+	var fall_speed := velocity.y
 	_apply_gravity(delta)
 	move_and_slide()
+	if not was_grounded and is_on_floor() and fall_speed < -1.0:
+		animator.landing = clampf(-fall_speed / 7.0, 0.0, 1.0)
 	_separate_from_others()
 	_update_stamina(delta)
 	_drive_animator(delta)
 	_update_ball_anchor(delta)
+	var release := _queued_release
+	_queued_release = ""
+	match release:
+		"shot": _release_shot(_forced_release)
+		"pass":
+			if is_instance_valid(_pending_pass):
+				_send_pass(_pending_pass)
+		"dunk": _finish_dunk()
+		"layup": _release_layup()
 	intent.clear_edges()
 
 
@@ -251,7 +268,7 @@ func _tick_dribble(delta: float) -> void:
 	# direction reads as a crossover instead of the ball sticking to one side.
 	var lateral := _facing.cross(Vector3.UP).dot(travel.normalized())
 	if gait > 0.35 and absf(lateral) > 0.5:
-		ball_hand = signf(lateral)
+		ball_hand = signf(lateral) * rig.lateral_side(1.0)
 
 
 func _tick_locomotion(delta: float) -> void:
@@ -267,7 +284,7 @@ func _tick_locomotion(delta: float) -> void:
 func _offence_inputs() -> void:
 	if intent.shoot_pressed:
 		_begin_shot_attempt()
-	elif intent.pass_pressed:
+	elif intent.pass_pressed and not free_throw_attempt:
 		_begin_pass()
 
 
@@ -293,6 +310,7 @@ func _begin_shot_attempt() -> void:
 	shot_charge = 0.0
 	shot_released_this_attempt = false
 	_took_off = false
+	_release_delay = -1.0
 	if free_throw_attempt:
 		_enter(State.SHOOT)
 		return
@@ -321,10 +339,15 @@ func _tick_shoot(delta: float) -> void:
 	_walk(delta, 0.25)
 	_face_point(rim(), delta, 14.0)
 	if shot_released_this_attempt:
-		if is_on_floor() and state_time > 0.35:
+		if is_on_floor() and state_time - _released_at > 0.25:
 			_enter(State.LOCOMOTION)
 		return
 
+	if _release_delay >= 0.0:
+		_release_delay = maxf(0.0, _release_delay - delta)
+		if _release_delay <= 0.0:
+			_queued_release = "shot"
+		return
 	shot_charge = minf(shot_charge + delta / CHARGE_TIME, OVERCHARGE)
 	if state_time > 0.16 and is_on_floor() and not _took_off and not free_throw_attempt:
 		_took_off = true
@@ -333,11 +356,14 @@ func _tick_shoot(delta: float) -> void:
 	if free_throw_attempt and not is_user_controlled:
 		intent.shoot_held = shot_charge < 0.65
 	if intent.shoot_released or (not intent.shoot_held and state_time > 0.1) or auto_release:
-		_release_shot(auto_release)
+		_release_delay = RELEASE_EXTENSION
+		_forced_release = auto_release
+		last_release_charge = shot_charge
 
 
 func _release_shot(forced: bool) -> void:
 	shot_released_this_attempt = true
+	_released_at = state_time
 	if ball == null or ball.holder != self:
 		return
 	var to_rim := distance_to_rim()
@@ -346,9 +372,9 @@ func _release_shot(forced: bool) -> void:
 	var contest := ShotSolver.contest_level(global_position, rig.shoulder_height, opponents)
 	var movement := clampf(velocity.length() / maxf(_max_speed, 0.01), 0.0, 1.0)
 	var accuracy := ShotSolver.accuracy(data, to_rim, behind_arc, quality, contest,
-		movement, 1.0 - stamina, Settings.get_value("difficulty"))
+		movement, 1.0 - stamina, match_difficulty)
 
-	var from := ShotSolver.release_point(self, rig.shoulder_height, _facing)
+	var from := ball_anchor.global_position
 	var target := ShotSolver.aim_point(rim(), from, accuracy, _rng)
 	var arc_bias := clampf(1.0 - to_rim / 9.0, 0.15, 0.95)
 	var time := ShotSolver.flight_time(from.distance_to(target), arc_bias)
@@ -360,6 +386,7 @@ func _release_shot(forced: bool) -> void:
 	ball.launch(from, launch, -_facing.cross(Vector3.UP) * 12.0, Ball.State.SHOT)
 	has_ball = false
 	pickup_cooldown = 0.35
+	last_shot_kind = "FREE THROW" if free_throw_attempt else "JUMPER"
 	shot_released.emit(self, ball.shot_points, accuracy)
 
 
@@ -436,7 +463,7 @@ func _tick_pass(delta: float) -> void:
 	if _pending_pass != null:
 		_face_point(_pending_pass.global_position, delta, 16.0)
 	if state_time >= 0.14 and has_ball and _pending_pass != null:
-		_send_pass(_pending_pass)
+		_queued_release = "pass"
 	if state_time > 0.32:
 		_enter(State.LOCOMOTION)
 
@@ -444,7 +471,7 @@ func _tick_pass(delta: float) -> void:
 func _send_pass(target: PlayerPawn) -> void:
 	if ball == null or ball.holder != self:
 		return
-	var from := global_position + Vector3.UP * (rig.shoulder_height * 0.92)
+	var from := ball_anchor.global_position
 	# Lead the receiver so a moving target does not have to stop.
 	var lead := target.velocity * 0.22
 	var to := target.global_position + lead + Vector3.UP * (target.rig.shoulder_height * 0.8)
@@ -508,7 +535,7 @@ func _tick_dunk(delta: float) -> void:
 	# Put it down at the top of the jump rather than on the way up, which is
 	# what made the dunk read as letting go early.
 	if has_ball and hand_height > CourtMetrics.RIM_HEIGHT + 0.02 and velocity.y < 0.35:
-		_finish_dunk()
+		_queued_release = "dunk"
 	if _took_off and is_on_floor() and state_time > 0.4 and has_ball:
 		_enter(State.LOCOMOTION)
 	if is_on_floor() and state_time > DUNK_HANG and not has_ball:
@@ -519,14 +546,20 @@ func _finish_dunk() -> void:
 	if ball == null or ball.holder != self:
 		return
 	var target := rim()
+	var from := ball_anchor.global_position
+	var flat := Vector2(from.x - target.x, from.z - target.z).length()
+	if flat > 0.65 or from.y < target.y + 0.04:
+		_release_layup()
+		return
 	ball.shot_by = get_instance_id()
 	ball.shot_points = 2
 	ball.shot_from = global_position
-	ball.launch(target + Vector3.UP * 0.10, Vector3(0.0, -4.4, 0.0) + velocity * 0.15,
+	ball.launch(from, ShotSolver.launch_velocity(from, target - Vector3.UP * 0.16, 0.14),
 		Vector3(6.0, 0.0, 0.0), Ball.State.SHOT)
 	has_ball = false
 	pickup_cooldown = 0.5
 	shot_released_this_attempt = true
+	last_shot_kind = "DUNK"
 	dunked.emit(self)
 	shot_released.emit(self, 2, 0.99)
 
@@ -542,7 +575,7 @@ func _tick_layup(delta: float) -> void:
 		velocity = flat.normalized() * minf(flat.length() * 1.2, _max_speed * 0.8)
 		velocity.y = sqrt(2.0 * GRAVITY * jump_height() * 0.82)
 	if has_ball and velocity.y < 0.6 and not is_on_floor():
-		_release_layup()
+		_queued_release = "layup"
 	if is_on_floor() and state_time > 0.4:
 		_enter(State.LOCOMOTION)
 
@@ -552,8 +585,8 @@ func _release_layup() -> void:
 		return
 	var contest := ShotSolver.contest_level(global_position, rig.shoulder_height, opponents)
 	var accuracy := ShotSolver.accuracy(data, distance_to_rim(), false, 0.82,
-		contest, 0.35, 1.0 - stamina, Settings.get_value("difficulty"))
-	var from := global_position + Vector3.UP * (standing_reach() - 0.15) + _facing * 0.15
+		contest, 0.35, 1.0 - stamina, match_difficulty)
+	var from := ball_anchor.global_position
 	# Aim off the glass rather than straight at the ring.
 	var board_point := rim() + Vector3.UP * 0.28
 	var target := ShotSolver.aim_point(board_point, from, accuracy, _rng)
@@ -566,6 +599,7 @@ func _release_layup() -> void:
 	has_ball = false
 	shot_released_this_attempt = true
 	pickup_cooldown = 0.4
+	last_shot_kind = "LAYUP"
 	shot_released.emit(self, 2, accuracy)
 
 
@@ -686,30 +720,21 @@ func _update_stamina(delta: float) -> void:
 	stamina = clampf(stamina, 0.0, 1.0)
 
 
-func _update_ball_anchor(delta: float) -> void:
+func _update_ball_anchor(_delta: float) -> void:
 	if not has_ball or ball == null:
 		return
-	var side := _facing.cross(Vector3.UP) * ball_hand * 0.34
-	match state:
-		State.SHOOT:
-			var lift := lerpf(1.05, 1.42, clampf(shot_charge, 0.0, 1.0))
-			ball_anchor.global_position = global_position \
-				+ Vector3.UP * (rig.shoulder_height * lift) + _facing * 0.16 + side * 0.4
-		State.PASS:
-			ball_anchor.global_position = global_position \
-				+ Vector3.UP * (rig.shoulder_height * 0.92) + _facing * 0.34
-		State.DUNK, State.LAYUP:
-			ball_anchor.global_position = global_position \
-				+ Vector3.UP * (standing_reach() - 0.22) + _facing * 0.18 + side * 0.5
-		_:
-			# Bounce apex at the hand, low point on the floor, and pushed out
-			# ahead of the player so it is not being carried.
-			var bounce := absf(sin(_dribble_phase))
-			var height := lerpf(CourtMetrics.BALL_RADIUS + 0.01,
-				rig.shoulder_height * 0.66, bounce)
-			var travel := Vector3(velocity.x, 0.0, velocity.z) * 0.10
-			ball_anchor.global_position = global_position + Vector3.UP * height \
-				+ _facing * 0.30 + side * 0.85 + travel
+	var grip := rig.grip_position(ball_hand)
+	if has_ball_gathered() or free_throw_attempt or not is_on_floor():
+		ball_anchor.global_position = grip + Vector3.UP * CourtMetrics.BALL_RADIUS
+	else:
+		var bounce := absf(sin(_dribble_phase))
+		var floor_y := global_position.y + CourtMetrics.BALL_RADIUS + 0.01
+		ball_anchor.global_position = Vector3(grip.x,
+			lerpf(floor_y, maxf(floor_y, grip.y), bounce), grip.z)
+	# The ball processes before the pawns. Updating here removes a frame of lag
+	# between the current pose and the held ball's transform.
+	if ball.holder == self:
+		ball.global_position = ball_anchor.global_position
 
 
 func take_ball(new_ball: Ball) -> void:
@@ -739,6 +764,8 @@ func cancel_action() -> void:
 	shot_charge = 0.0
 	shot_released_this_attempt = false
 	_took_off = false
+	_release_delay = -1.0
+	_queued_release = ""
 	intent.reset()
 
 
@@ -755,9 +782,9 @@ func _drive_animator(delta: float) -> void:
 	animator.defending = not has_ball and _team_on_defence()
 	animator.action = _animator_action()
 	animator.action_t = _action_progress()
+	animator.dribble_driven = true
+	animator.dribble_phase = _dribble_phase
 	animator.tick(delta)
-	if animator.defending:
-		animator.apply_defensive_arms()
 
 
 func _team_on_defence() -> bool:
@@ -791,7 +818,9 @@ func _action_progress() -> float:
 		State.SHOOT:
 			if shot_released_this_attempt:
 				return 1.0
-			return clampf(shot_charge / OVERCHARGE, 0.0, 1.0)
+			if _release_delay >= 0.0:
+				return lerpf(0.42, 0.62, 1.0 - _release_delay / RELEASE_EXTENSION)
+			return clampf(shot_charge / IDEAL_RELEASE.x, 0.0, 1.0) * 0.42
 		State.PASS:
 			return clampf(state_time / 0.32, 0.0, 1.0)
 		State.DUNK:

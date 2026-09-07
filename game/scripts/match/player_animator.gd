@@ -16,6 +16,8 @@ const DEFENCE_CROUCH := 0.55
 var rig: PlayerRig
 var stride_phase := 0.0
 var dribble_phase := 0.0
+var dribble_driven := false
+var landing := 0.0
 
 var speed := 0.0
 var top_speed := 7.0
@@ -39,14 +41,20 @@ func tick(delta: float) -> void:
 	var gait := clampf(speed / maxf(top_speed, 0.01), 0.0, 1.4)
 	if grounded:
 		stride_phase += delta * (speed / STRIDE_LENGTH) * TAU
-	dribble_phase += delta * TAU * (1.7 + gait * 1.5)
+	if not dribble_driven:
+		dribble_phase += delta * PI * (2.2 + gait * 1.9)
+	landing = maxf(0.0, landing - delta * 6.0)
 
 	_legs(gait)
 	_torso(gait)
 	_arms(gait)
+	if defending:
+		apply_defensive_arms()
 
 	rig.apply(delta, 20.0 if action == Action.NONE else 26.0)
 	rig.position.y = _bob
+	if grounded and rig.is_inside_tree():
+		rig.ground_feet()
 
 
 func _legs(gait: float) -> void:
@@ -64,20 +72,20 @@ func _legs(gait: float) -> void:
 		var phase := stride_phase + (0.0 if side > 0.0 else PI)
 		var thigh := sin(phase) * amplitude
 		var knee := -(0.12 + 0.92 * maxf(0.0, cos(phase))) * knee_amount
-		rig.set_target("hip_%s" % tag, Vector3(thigh, 0.0, side * 0.04))
+		rig.set_target("hip_%s" % tag, Vector3(thigh, 0.0, rig.lateral_side(side) * 0.04))
 		rig.set_target("knee_%s" % tag, Vector3(knee, 0.0, 0.0))
 		rig.set_target("ankle_%s" % tag, Vector3(-thigh * 0.35 + 0.12, 0.0, 0.0))
 	_bob = -absf(sin(stride_phase)) * (0.02 + gait * 0.035) * rig.height
 
 
 func _planted_legs(gait: float) -> void:
-	var crouch := DEFENCE_CROUCH if defending else 0.16
+	var crouch := (DEFENCE_CROUCH if defending else 0.16) + landing * 0.35
 	var idle_sway := sin(dribble_phase * 0.35) * 0.02
 	for side in [1.0, -1.0]:
 		var tag := "l" if side > 0.0 else "r"
 		var stance := 0.16 if defending else 0.06
 		rig.set_target("hip_%s" % tag,
-			Vector3(crouch * 0.55 + idle_sway, 0.0, side * stance))
+			Vector3(crouch * 0.55 + idle_sway, 0.0, rig.lateral_side(side) * stance))
 		rig.set_target("knee_%s" % tag, Vector3(-crouch * 1.5, 0.0, 0.0))
 		rig.set_target("ankle_%s" % tag, Vector3(crouch * 0.7, 0.0, 0.0))
 	_bob = -crouch * 0.30 * rig.height
@@ -86,11 +94,11 @@ func _planted_legs(gait: float) -> void:
 func _air_legs() -> void:
 	# Tuck on the way up, reach for the floor on the way down.
 	var rising := clampf(airborne, -1.0, 1.0)
-	var tuck := 0.55 - rising * 0.35
-	rig.set_target("hip_l", Vector3(tuck, 0.0, 0.10))
+	var tuck := 0.12 + maxf(rising, 0.0) * 0.55
+	rig.set_target("hip_l", Vector3(tuck, 0.0, rig.lateral_side(1.0) * 0.10))
 	rig.set_target("knee_l", Vector3(-tuck * 1.7, 0.0, 0.0))
 	rig.set_target("ankle_l", Vector3(0.25, 0.0, 0.0))
-	rig.set_target("hip_r", Vector3(tuck * 0.55, 0.0, -0.10))
+	rig.set_target("hip_r", Vector3(tuck * 0.55, 0.0, rig.lateral_side(-1.0) * 0.10))
 	rig.set_target("knee_r", Vector3(-tuck * 1.1, 0.0, 0.0))
 	rig.set_target("ankle_r", Vector3(0.25, 0.0, 0.0))
 	_bob = 0.0
@@ -139,22 +147,22 @@ func _running_arms(gait: float) -> void:
 		# Arms counter the legs, so the left arm follows the right leg.
 		var phase := stride_phase + (PI if side > 0.0 else 0.0)
 		rig.set_target("shoulder_%s" % tag,
-			Vector3(sin(phase) * swing, 0.0, side * (0.15 + gait * 0.09)))
+			Vector3(sin(phase) * swing, 0.0, rig.lateral_side(side) * (0.15 + gait * 0.09)))
 		rig.set_target("elbow_%s" % tag,
 			Vector3(0.42 + gait * 0.62 + maxf(0.0, sin(phase)) * 0.5, 0.0, 0.0))
 
 
 func _dribble_arms(gait: float) -> void:
-	var pump := sin(dribble_phase)
+	var pump := absf(sin(dribble_phase)) * 2.0 - 1.0
 	var off_hand := -ball_hand
 	var ball_tag := "l" if ball_hand > 0.0 else "r"
 	var free_tag := "l" if off_hand > 0.0 else "r"
 	rig.set_target("shoulder_%s" % ball_tag,
-		Vector3(0.42 + pump * 0.30, 0.0, ball_hand * 0.30))
+		Vector3(0.42 + pump * 0.30, 0.0, rig.lateral_side(ball_hand) * 0.30))
 	rig.set_target("elbow_%s" % ball_tag, Vector3(0.85 + pump * 0.45, 0.0, 0.0))
 	# Off arm shields the ball.
 	rig.set_target("shoulder_%s" % free_tag,
-		Vector3(0.55, 0.0, off_hand * (0.55 + gait * 0.2)))
+		Vector3(0.55, 0.0, rig.lateral_side(off_hand) * (0.55 + gait * 0.2)))
 	rig.set_target("elbow_%s" % free_tag, Vector3(1.25, 0.0, 0.0))
 
 
@@ -176,10 +184,10 @@ func _shoot_arms() -> void:
 		elbow = 0.12
 	var shoot_tag := "l" if ball_hand > 0.0 else "r"
 	var guide_tag := "l" if ball_hand < 0.0 else "r"
-	rig.set_target("shoulder_%s" % shoot_tag, Vector3(raise_amount, 0.0, ball_hand * 0.12))
+	rig.set_target("shoulder_%s" % shoot_tag, Vector3(raise_amount, 0.0, rig.lateral_side(ball_hand) * 0.12))
 	rig.set_target("elbow_%s" % shoot_tag, Vector3(elbow, 0.0, 0.0))
 	rig.set_target("shoulder_%s" % guide_tag,
-		Vector3(raise_amount * 0.78, 0.0, -ball_hand * 0.45))
+		Vector3(raise_amount * 0.78, 0.0, -rig.lateral_side(ball_hand) * 0.45))
 	rig.set_target("elbow_%s" % guide_tag, Vector3(maxf(elbow, 0.9), 0.0, 0.0))
 
 
@@ -189,7 +197,7 @@ func _pass_arms() -> void:
 	var elbow := lerpf(1.5, 0.15, minf(t * 2.4, 1.0))
 	for tag in ["l", "r"]:
 		var side := 1.0 if tag == "l" else -1.0
-		rig.set_target("shoulder_%s" % tag, Vector3(push, 0.0, side * 0.22))
+		rig.set_target("shoulder_%s" % tag, Vector3(push, 0.0, rig.lateral_side(side) * 0.22))
 		rig.set_target("elbow_%s" % tag, Vector3(elbow, 0.0, 0.0))
 
 
@@ -198,9 +206,9 @@ func _dunk_arms() -> void:
 	var tag := "l" if ball_hand > 0.0 else "r"
 	var other := "l" if ball_hand < 0.0 else "r"
 	var cock := lerpf(1.4, 3.05, minf(t * 1.8, 1.0))
-	rig.set_target("shoulder_%s" % tag, Vector3(cock, 0.0, ball_hand * 0.30))
+	rig.set_target("shoulder_%s" % tag, Vector3(cock, 0.0, rig.lateral_side(ball_hand) * 0.30))
 	rig.set_target("elbow_%s" % tag, Vector3(lerpf(1.3, 0.08, minf(t * 2.0, 1.0)), 0.0, 0.0))
-	rig.set_target("shoulder_%s" % other, Vector3(2.2 * t + 0.6, 0.0, -ball_hand * 0.55))
+	rig.set_target("shoulder_%s" % other, Vector3(2.2 * t + 0.6, 0.0, -rig.lateral_side(ball_hand) * 0.55))
 	rig.set_target("elbow_%s" % other, Vector3(0.7, 0.0, 0.0))
 
 
@@ -209,10 +217,10 @@ func _layup_arms() -> void:
 	var tag := "l" if ball_hand > 0.0 else "r"
 	var other := "l" if ball_hand < 0.0 else "r"
 	rig.set_target("shoulder_%s" % tag,
-		Vector3(lerpf(1.1, 2.75, minf(t * 1.6, 1.0)), 0.0, ball_hand * 0.20))
+		Vector3(lerpf(1.1, 2.75, minf(t * 1.6, 1.0)), 0.0, rig.lateral_side(ball_hand) * 0.20))
 	rig.set_target("elbow_%s" % tag,
 		Vector3(lerpf(1.5, 0.35, minf(t * 1.6, 1.0)), 0.0, 0.0))
-	rig.set_target("shoulder_%s" % other, Vector3(0.9, 0.0, -ball_hand * 0.5))
+	rig.set_target("shoulder_%s" % other, Vector3(0.9, 0.0, -rig.lateral_side(ball_hand) * 0.5))
 	rig.set_target("elbow_%s" % other, Vector3(1.4, 0.0, 0.0))
 
 
@@ -220,14 +228,14 @@ func _arms_overhead() -> void:
 	var reach := lerpf(1.2, 3.02, clampf(action_t * 2.2, 0.0, 1.0))
 	for tag in ["l", "r"]:
 		var side := 1.0 if tag == "l" else -1.0
-		rig.set_target("shoulder_%s" % tag, Vector3(reach, 0.0, side * 0.24))
+		rig.set_target("shoulder_%s" % tag, Vector3(reach, 0.0, rig.lateral_side(side) * 0.24))
 		rig.set_target("elbow_%s" % tag, Vector3(0.10, 0.0, 0.0))
 
 
 func _steal_arms() -> void:
 	var t := clampf(action_t * 2.6, 0.0, 1.0)
 	var tag := "l" if ball_hand > 0.0 else "r"
-	rig.set_target("shoulder_%s" % tag, Vector3(lerpf(0.5, 1.55, t), 0.0, ball_hand * 0.5))
+	rig.set_target("shoulder_%s" % tag, Vector3(lerpf(0.5, 1.55, t), 0.0, rig.lateral_side(ball_hand) * 0.5))
 	rig.set_target("elbow_%s" % tag, Vector3(lerpf(1.2, 0.2, t), 0.0, 0.0))
 
 
@@ -235,7 +243,7 @@ func _celebrate_arms() -> void:
 	var wave := sin(dribble_phase * 1.6) * 0.35
 	for tag in ["l", "r"]:
 		var side := 1.0 if tag == "l" else -1.0
-		rig.set_target("shoulder_%s" % tag, Vector3(2.7 + wave * side, 0.0, side * 0.6))
+		rig.set_target("shoulder_%s" % tag, Vector3(2.7 + wave * side, 0.0, rig.lateral_side(side) * 0.6))
 		rig.set_target("elbow_%s" % tag, Vector3(0.4 - wave * 0.3, 0.0, 0.0))
 
 
@@ -246,5 +254,5 @@ func apply_defensive_arms() -> void:
 		return
 	for tag in ["l", "r"]:
 		var side := 1.0 if tag == "l" else -1.0
-		rig.set_target("shoulder_%s" % tag, Vector3(0.30, 0.0, side * 1.15))
+		rig.set_target("shoulder_%s" % tag, Vector3(0.30, 0.0, rig.lateral_side(side) * 1.15))
 		rig.set_target("elbow_%s" % tag, Vector3(0.55, 0.0, 0.0))

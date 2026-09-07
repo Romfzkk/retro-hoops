@@ -20,6 +20,9 @@ var animators: Array[PlayerAnimator] = []
 
 
 func _ready() -> void:
+	var model_path := FrameCapture.argument("--player-model")
+	if not model_path.is_empty():
+		ModelRig.preview_asset(model_path)
 	var lg := League.new_league(11)
 	var team: Dictionary = lg["teams"][7]
 
@@ -28,9 +31,15 @@ func _ready() -> void:
 
 	for i in POSES.size():
 		var pose: Dictionary = POSES[i]
-		var player: Dictionary = team["roster"][i]
+		var selected_pose := FrameCapture.argument("--pose")
+		if not selected_pose.is_empty() and pose["label"] != selected_pose:
+			continue
+		var player: Dictionary = team["roster"][0]
 		var holder := Node3D.new()
-		holder.position = Vector3(float(i) * 1.75 - float(POSES.size() - 1) * 0.875,
+		var x := float(i) * 1.75 - float(POSES.size() - 1) * 0.875
+		if not selected_pose.is_empty():
+			x = 0.0
+		holder.position = Vector3(x,
 			1.0 if pose.get("air", false) else 0.0, 0.0)
 		# Face the camera: the rig is modelled looking down -Z.
 		holder.rotation.y = PI + (0.5 if i % 2 == 0 else -0.4)
@@ -48,14 +57,12 @@ func _ready() -> void:
 		animator.defending = bool(pose.get("defend", false))
 		animator.stride_phase = 1.1
 		animator.tick(0.016)
-		if animator.defending:
-			animator.apply_defensive_arms()
 		rig.snap_to_target()
 		animators.append(animator)
 
 	var camera := Camera3D.new()
 	if FrameCapture.has_flag("--closeup"):
-		camera.position = Vector3(-4.35, 1.52, 1.9)
+		camera.position = Vector3(-4.35 if FrameCapture.argument("--pose").is_empty() else 0.0, 1.52, 1.9)
 		camera.rotation_degrees = Vector3(-4.0, 0.0, 0.0)
 		camera.fov = 32.0
 	else:
