@@ -56,6 +56,10 @@ var animator: PlayerAnimator
 var ball_anchor: Node3D
 var stamina := 1.0
 var has_ball := false
+var actions_enabled := true
+var movement_enabled := true
+var free_throw_attempt := false
+var _took_off := false
 
 var state: State = State.LOCOMOTION
 var state_time := 0.0
@@ -194,8 +198,8 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	_separate_from_others()
 	_update_stamina(delta)
-	_update_ball_anchor(delta)
 	_drive_animator(delta)
+	_update_ball_anchor(delta)
 	intent.clear_edges()
 
 
@@ -253,10 +257,11 @@ func _tick_dribble(delta: float) -> void:
 func _tick_locomotion(delta: float) -> void:
 	_walk(delta, 1.0)
 	_face_travel(delta)
-	if has_ball:
-		_offence_inputs()
-	else:
-		_defence_inputs()
+	if actions_enabled:
+		if has_ball:
+			_offence_inputs()
+		else:
+			_defence_inputs()
 
 
 func _offence_inputs() -> void:
@@ -287,6 +292,10 @@ func _begin_shot_attempt() -> void:
 	# stale release skipped its own jump.
 	shot_charge = 0.0
 	shot_released_this_attempt = false
+	_took_off = false
+	if free_throw_attempt:
+		_enter(State.SHOOT)
+		return
 	var to_rim := distance_to_rim()
 	var flat := Vector3(velocity.x, 0.0, velocity.z)
 	var heading := (rim() - global_position)
@@ -317,9 +326,12 @@ func _tick_shoot(delta: float) -> void:
 		return
 
 	shot_charge = minf(shot_charge + delta / CHARGE_TIME, OVERCHARGE)
-	if state_time > 0.16 and is_on_floor():
+	if state_time > 0.16 and is_on_floor() and not _took_off and not free_throw_attempt:
+		_took_off = true
 		velocity.y = sqrt(2.0 * GRAVITY * jump_height() * 0.55)
 	var auto_release := shot_charge >= OVERCHARGE
+	if free_throw_attempt and not is_user_controlled:
+		intent.shoot_held = shot_charge < 0.65
 	if intent.shoot_released or (not intent.shoot_held and state_time > 0.1) or auto_release:
 		_release_shot(auto_release)
 
@@ -449,6 +461,7 @@ func _send_pass(target: PlayerPawn) -> void:
 	var thief := _lane_thief(from, to)
 	ball.pass_target = thief.get_instance_id() if thief != null \
 		else target.get_instance_id()
+	ball.last_touched_by = get_instance_id()
 	ball.launch(from, ShotSolver.launch_velocity(from, to, zip), Vector3.ZERO,
 		Ball.State.PASS)
 	has_ball = false
@@ -483,7 +496,8 @@ func _tick_dunk(delta: float) -> void:
 	if state_time < 0.12:
 		_walk(delta, 0.9)
 	_face_point(target, delta, 18.0)
-	if state_time >= 0.10 and is_on_floor() and not shot_released_this_attempt:
+	if state_time >= 0.10 and is_on_floor() and not _took_off:
+		_took_off = true
 		var flat := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
 		# A hard approach goes higher, so a fast break finishes above the rim
 		# rather than scraping it.
@@ -495,7 +509,9 @@ func _tick_dunk(delta: float) -> void:
 	# what made the dunk read as letting go early.
 	if has_ball and hand_height > CourtMetrics.RIM_HEIGHT + 0.02 and velocity.y < 0.35:
 		_finish_dunk()
-	if is_on_floor() and state_time > DUNK_HANG and shot_released_this_attempt:
+	if _took_off and is_on_floor() and state_time > 0.4 and has_ball:
+		_enter(State.LOCOMOTION)
+	if is_on_floor() and state_time > DUNK_HANG and not has_ball:
 		_enter(State.LOCOMOTION)
 
 
@@ -520,7 +536,8 @@ func _tick_layup(delta: float) -> void:
 	if state_time < 0.14:
 		_walk(delta, 0.85)
 	_face_point(target, delta, 16.0)
-	if state_time >= 0.12 and is_on_floor():
+	if state_time >= 0.12 and is_on_floor() and not _took_off:
+		_took_off = true
 		var flat := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
 		velocity = flat.normalized() * minf(flat.length() * 1.2, _max_speed * 0.8)
 		velocity.y = sqrt(2.0 * GRAVITY * jump_height() * 0.82)
@@ -547,6 +564,7 @@ func _release_layup() -> void:
 	ball.launch(from, ShotSolver.launch_velocity(from, target, time),
 		Vector3(0.0, 0.0, 6.0), Ball.State.SHOT)
 	has_ball = false
+	shot_released_this_attempt = true
 	pickup_cooldown = 0.4
 	shot_released.emit(self, 2, accuracy)
 
@@ -594,7 +612,7 @@ func _ball_carrier_in_reach() -> PlayerPawn:
 
 
 func _walk(delta: float, control: float) -> void:
-	var wish := Vector3(intent.move.x, 0.0, intent.move.y)
+	var wish := Vector3(intent.move.x, 0.0, intent.move.y) if movement_enabled else Vector3.ZERO
 	if wish.length() > 1.0:
 		wish = wish.normalized()
 	var sprinting := intent.sprint and stamina > 0.05 and not has_ball_gathered()
@@ -695,6 +713,9 @@ func _update_ball_anchor(delta: float) -> void:
 
 
 func take_ball(new_ball: Ball) -> void:
+	if new_ball.holder is PlayerPawn and new_ball.holder != self:
+		(new_ball.holder as PlayerPawn).lose_ball()
+	cancel_action()
 	ball = new_ball
 	has_ball = true
 	ball_hand = 1.0 if _rng.randf() < 0.72 else -1.0
@@ -705,8 +726,20 @@ func take_ball(new_ball: Ball) -> void:
 
 
 func lose_ball() -> void:
+	if ball != null and ball.holder == self:
+		ball.go_loose()
 	has_ball = false
 	pickup_cooldown = 0.25
+
+
+func cancel_action() -> void:
+	if state != State.LOCOMOTION:
+		_enter(State.LOCOMOTION)
+	_pending_pass = null
+	shot_charge = 0.0
+	shot_released_this_attempt = false
+	_took_off = false
+	intent.reset()
 
 
 func can_pick_up() -> bool:

@@ -34,6 +34,7 @@ func attach_touch(controls: TouchControls) -> void:
 
 
 func tick(delta: float, ctx: MatchContext) -> void:
+	_sample_pad()
 	_switch_cooldown = maxf(0.0, _switch_cooldown - delta)
 	_follow_possession(ctx)
 	if active == null:
@@ -53,7 +54,7 @@ func tick(delta: float, ctx: MatchContext) -> void:
 	intent.pass_pressed = _pressed("pass_ball")
 	intent.special_pressed = _pressed("special")
 
-	if _pressed("switch_player") and _switch_cooldown <= 0.0:
+	if ctx.is_live() and _pressed("switch_player") and _switch_cooldown <= 0.0:
 		_switch_cooldown = SWITCH_COOLDOWN
 		_switch_to_nearest(ctx)
 	_remember(intent)
@@ -137,7 +138,7 @@ func _held(action: String) -> bool:
 		return _touch.is_held(action)
 	if device == Device.ACTIONS:
 		return Input.is_action_pressed(action)
-	return Input.is_joy_button_pressed(pad_id, _pad_button(action))
+	return bool(_pad_state.get(action, false))
 
 
 func _pressed(action: String) -> bool:
@@ -157,13 +158,21 @@ func _released(action: String) -> bool:
 
 
 var _pad_state: Dictionary = {}
+var _pad_previous: Dictionary = {}
+
+
+func _sample_pad() -> void:
+	if device != Device.PAD:
+		return
+	_pad_previous = _pad_state.duplicate()
+	for action in ["shoot", "pass_ball", "special", "switch_player", "sprint"]:
+		_pad_state[action] = Input.get_joy_axis(pad_id, JOY_AXIS_TRIGGER_RIGHT) > 0.3 \
+			if action == "sprint" else Input.is_joy_button_pressed(pad_id, _pad_button(action))
 
 
 func _pad_edge(action: String, wanted_press: bool) -> bool:
-	var button := _pad_button(action)
-	var down := Input.is_joy_button_pressed(pad_id, button)
-	var was: bool = _pad_state.get(action, false)
-	_pad_state[action] = down
+	var down := bool(_pad_state.get(action, false))
+	var was := bool(_pad_previous.get(action, false))
 	return (down and not was) if wanted_press else (was and not down)
 
 

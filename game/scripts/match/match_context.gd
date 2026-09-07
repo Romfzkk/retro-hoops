@@ -44,10 +44,10 @@ static func landing_point(ball_node: Ball, floor_height: float = 1.0) -> Vector3
 	var gravity := ShotSolver.GRAVITY
 	var height := position.y - floor_height
 	if height <= 0.0 and velocity.y <= 0.0:
-		return position
+		return Vector3(position.x, floor_height, position.z)
 	# Solve the downward crossing of the catch height.
 	var discriminant := velocity.y * velocity.y + 2.0 * gravity * height
 	if discriminant < 0.0:
 		return position
 	var time := (velocity.y + sqrt(discriminant)) / gravity
-	return position + Vector3(velocity.x * time, 0.0, velocity.z * time)
+	return Vector3(position.x + velocity.x * time, floor_height, position.z + velocity.z * time)

@@ -16,6 +16,7 @@ var quarter := 1
 var remaining := 300.0
 var shot_clock := SHOT_CLOCK
 var running := false
+var shot_in_flight := false
 
 
 func _init(quarter_count: int, seconds_per_quarter: float) -> void:
@@ -35,12 +36,13 @@ func tick(delta: float) -> void:
 		quarter_expired.emit(quarter)
 		return
 	shot_clock = maxf(0.0, shot_clock - delta)
-	if shot_clock <= 0.0:
+	if shot_clock <= 0.0 and not shot_in_flight:
 		running = false
 		shot_clock_expired.emit()
 
 
 func reset_shot_clock(seconds: float = SHOT_CLOCK) -> void:
+	shot_in_flight = false
 	# Never hand back more time than is left in the period.
 	shot_clock = seconds if remaining <= 0.0 else minf(seconds, remaining)
 

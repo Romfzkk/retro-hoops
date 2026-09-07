@@ -28,6 +28,7 @@ var last_touched_by: int = -1
 ## A shot cannot be rebounded until it has hit iron or dropped below the ring.
 ## Without this, defenders pluck live shots out of the air mid-flight.
 var rebound_ready := true
+var touched_rim := false
 
 var _floor_cooldown := 0.0
 var _pass_age := 0.0
@@ -99,6 +100,10 @@ func _physics_process(delta: float) -> void:
 		global_position = hold_anchor.global_position
 		linear_velocity = Vector3.ZERO
 		angular_velocity = Vector3.ZERO
+	elif state == State.PASS:
+		_pass_age += delta
+		if _pass_age >= PASS_LIFETIME:
+			go_loose()
 	elif state == State.SHOT and not rebound_ready:
 		_track_shot_flight()
 
@@ -125,6 +130,9 @@ func hold(new_holder: Node3D, anchor: Node3D, player_index: int) -> void:
 	last_touched_by = player_index
 	state = State.HELD
 	freeze = true
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	global_position = anchor.global_position
 	shot_by = -1
 	pass_target = -1
 
@@ -149,6 +157,7 @@ func release(velocity: Vector3, spin: Vector3, new_state: State) -> void:
 	angular_velocity = spin
 	rebound_ready = new_state != State.SHOT
 	_reached_rim_height = false
+	touched_rim = false
 	_pass_age = 0.0
 
 
@@ -156,6 +165,8 @@ func go_loose() -> void:
 	holder = null
 	hold_anchor = null
 	state = State.LOOSE
+	pass_target = -1
+	rebound_ready = true
 	freeze = false
 
 
@@ -165,6 +176,21 @@ func set_paused(paused: bool) -> void:
 	if state == State.HELD:
 		return
 	freeze = paused
+
+
+func park() -> void:
+	holder = null
+	hold_anchor = null
+	state = State.DEAD
+	pass_target = -1
+	freeze = true
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+
+
+func shot_has_fallen() -> bool:
+	return rebound_ready and linear_velocity.y <= 0.0 \
+		and global_position.y < CourtMetrics.RIM_HEIGHT - 0.35
 
 
 func is_live() -> bool:
@@ -178,6 +204,7 @@ func speed() -> float:
 func _on_body_entered(body: Node) -> void:
 	if body.is_in_group("rim"):
 		rebound_ready = true
+		touched_rim = true
 		hit_rim.emit()
 	elif body.is_in_group("backboard"):
 		rebound_ready = true

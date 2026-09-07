@@ -41,6 +41,7 @@ var difficulty := 1
 var _decision_time := 0.0
 var _assignments: Dictionary = {}
 var _cuts: Dictionary = {}
+var _probe_side: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
 
 
@@ -54,7 +55,7 @@ func tick(delta: float, ctx: MatchContext) -> void:
 	_decision_time -= delta
 	var refresh := _decision_time <= 0.0
 	if refresh:
-		_decision_time = DECISION_INTERVAL
+		_decision_time += DECISION_INTERVAL
 		_assign_matchups(ctx)
 
 	for pawn in pawns:
@@ -62,7 +63,6 @@ func tick(delta: float, ctx: MatchContext) -> void:
 			continue
 		pawn.intent.reset()
 		if not ctx.is_live():
-			_idle(pawn, ctx)
 			continue
 		if ctx.phase == MatchContext.Phase.SHOT_IN_FLIGHT \
 				or ctx.phase == MatchContext.Phase.LOOSE_BALL:
@@ -74,11 +74,6 @@ func tick(delta: float, ctx: MatchContext) -> void:
 				_space(pawn, ctx, delta)
 		else:
 			_defend(pawn, ctx, refresh)
-
-
-func _idle(pawn: PlayerPawn, ctx: MatchContext) -> void:
-	var home := _spot_for(pawn, ctx)
-	_steer(pawn, home, 0.4)
 
 
 func _chase_ball(pawn: PlayerPawn, ctx: MatchContext) -> void:
@@ -105,6 +100,7 @@ func _drive_decision(pawn: PlayerPawn, ctx: MatchContext, refresh: bool) -> void
 	var lane_is_open := _lane_is_open(pawn, ctx)
 
 	if refresh:
+		_probe_side[pawn.get_instance_id()] = -1.0 if _rng.randf() < 0.5 else 1.0
 		var lane_open := lane_is_open
 		var shoot_score := 0.0
 		if contest < OPEN_CONTEST:
@@ -154,14 +150,15 @@ func _drive_decision(pawn: PlayerPawn, ctx: MatchContext, refresh: bool) -> void
 	else:
 		# Probe sideways to make the defender commit.
 		var across := (rim - pawn.global_position).cross(Vector3.UP).normalized()
-		var probe := pawn.global_position + across * signf(_rng.randfn(0.0, 1.0)) * 2.4
+		var probe := pawn.global_position + across * float(_probe_side.get(pawn.get_instance_id(), 1.0)) * 2.4
 		_steer(pawn, probe, 0.7)
 
 
 func _space(pawn: PlayerPawn, ctx: MatchContext, delta: float) -> void:
 	var key := pawn.get_instance_id()
-	var cut: Dictionary = _cuts.get(key, {"wait": _rng.randf_range(3.0, 8.0), "for": 0.0})
-	_cuts[key] = cut
+	if not _cuts.has(key):
+		_cuts[key] = {"wait": _rng.randf_range(3.0, 8.0), "for": 0.0}
+	var cut: Dictionary = _cuts[key]
 
 	if float(cut["for"]) > 0.0:
 		cut["for"] = float(cut["for"]) - delta

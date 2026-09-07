@@ -3,7 +3,7 @@ extends RefCounted
 
 # Per-player counting stats plus the team totals the scoreboard reads.
 
-const STAT_KEYS := ["pts", "fga", "fgm", "tpa", "tpm", "reb", "ast", "stl", "blk", "to", "pf"]
+const STAT_KEYS := ["pts", "fta", "ftm", "fga", "fgm", "tpa", "tpm", "reb", "ast", "stl", "blk", "to", "pf"]
 
 var team_points := [0, 0]
 var quarter_points := [[], []]
@@ -31,22 +31,23 @@ func record_basket(player_id: int, points: int, quarter: int) -> void:
 		return
 	var row: Dictionary = players[player_id]
 	row["pts"] = int(row["pts"]) + points
-	row["fgm"] = int(row["fgm"]) + 1
-	row["fga"] = int(row["fga"]) + 1
+	var made_key := "ftm" if points == 1 else "fgm"
+	var attempt_key := "fta" if points == 1 else "fga"
+	row[made_key] = int(row[made_key]) + 1
+	row[attempt_key] = int(row[attempt_key]) + 1
 	if points == 3:
 		row["tpm"] = int(row["tpm"]) + 1
 		row["tpa"] = int(row["tpa"]) + 1
 	var team: int = row["team"]
-	team_points[team] += points
-	_ensure_quarter(team, quarter)
-	quarter_points[team][quarter - 1] += points
+	record_team_basket(team, points, quarter)
 
 
 func record_miss(player_id: int, points: int) -> void:
 	if not players.has(player_id):
 		return
 	var row: Dictionary = players[player_id]
-	row["fga"] = int(row["fga"]) + 1
+	var key := "fta" if points == 1 else "fga"
+	row[key] = int(row[key]) + 1
 	if points == 3:
 		row["tpa"] = int(row["tpa"]) + 1
 
@@ -64,6 +65,16 @@ func credit_assist(scorer_id: int, at_time: float) -> void:
 	if at_time - float(entry["time"]) <= 3.0:
 		add(int(entry["id"]), "ast")
 	_last_passer.erase(scorer_id)
+
+
+func record_team_basket(team: int, points: int, quarter: int) -> void:
+	team_points[team] += points
+	_ensure_quarter(team, quarter)
+	quarter_points[team][quarter - 1] += points
+
+
+func clear_assists() -> void:
+	_last_passer.clear()
 
 
 func clear_pass_credit(player_id: int) -> void:

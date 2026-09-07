@@ -18,7 +18,7 @@ var rim_position: Vector3
 var _ring: MeshInstance3D
 var _flex := 0.0
 var _net_material: ShaderMaterial
-var _previous_ball_y := 0.0
+var _previous_ball_position := Vector3.ZERO
 var _armed := false
 var _swish := 0.0
 
@@ -270,26 +270,34 @@ func _process(delta: float) -> void:
 
 
 # Called by the match each physics tick. Returns the points scored, or 0.
+func reset_tracking(from: Vector3) -> void:
+	_previous_ball_position = from
+	_armed = from.y > rim_position.y - SCORE_PLANE_DROP
+
+
 func check_ball(ball: Ball) -> int:
 	var plane_y := rim_position.y - SCORE_PLANE_DROP
-	var y := ball.global_position.y
-	var previous := _previous_ball_y
-	_previous_ball_y = y
-
-	if y > plane_y + 0.25:
+	var current := ball.global_position
+	var previous := _previous_ball_position
+	_previous_ball_position = current
+	if ball.state != Ball.State.SHOT:
+		_armed = false
+		return 0
+	if current.y > plane_y:
 		_armed = true
-	if not _armed or previous <= plane_y or y > plane_y:
+	if not _armed or previous.y <= plane_y or current.y > plane_y:
 		return 0
 	if ball.linear_velocity.y >= 0.0:
 		return 0
-	var flat := Vector2(ball.global_position.x - rim_position.x,
-		ball.global_position.z - rim_position.z).length()
+	# Test the segment at the rim plane, not its endpoint after a fast dunk.
+	var fraction := (previous.y - plane_y) / (previous.y - current.y)
+	var crossing := previous.lerp(current, fraction)
+	var flat := Vector2(crossing.x - rim_position.x, crossing.z - rim_position.z).length()
 	if flat > CourtMetrics.RIM_RADIUS - CourtMetrics.BALL_RADIUS * 0.35:
 		return 0
-
 	_armed = false
 	_swish = 1.0
-	_net_material.set_shader_parameter("swish", 1.0)
-	var points := ball.shot_points if ball.state == Ball.State.SHOT else 2
-	scored.emit(points)
-	return points
+	if _net_material != null:
+		_net_material.set_shader_parameter("swish", 1.0)
+	scored.emit(ball.shot_points)
+	return ball.shot_points

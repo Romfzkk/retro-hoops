@@ -52,6 +52,8 @@ var _balance_run := false
 var _verbose := false
 
 var _pending_shot := {}
+var _period_pending := false
+var _rebound_team := -1
 var _phase_timer := 0.0
 var _tipoff_step := 0
 var _tipoff_timer := 0.0
@@ -68,7 +70,11 @@ func _ready() -> void:
 	setup = Game.setup
 	if setup.home.is_empty():
 		_fill_exhibition_setup()
-	_rng.randomize()
+	var seed_arg := FrameCapture.argument("--seed")
+	if seed_arg.is_empty():
+		_rng.randomize()
+	else:
+		_rng.seed = int(seed_arg)
 
 	clock = MatchClock.new(setup.quarters, float(setup.quarter_seconds))
 	clock.quarter_expired.connect(_on_quarter_expired)
@@ -91,6 +97,7 @@ func _ready() -> void:
 	ball = Ball.create()
 	ball.touched_floor.connect(_on_ball_bounced)
 	ball.hit_rim.connect(func(): Sound.play("rim", -4.0, randf_range(0.94, 1.08)))
+	ball.hit_rim.connect(_on_rim_contact)
 	ball.hit_backboard.connect(func(): Sound.play("backboard", -3.0))
 	add_child(ball)
 
@@ -244,8 +251,11 @@ func _setup_hud() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if ctx.phase == MatchContext.Phase.OVER:
+		return
 	_elapsed += delta
 	_update_context()
+	_set_play_permissions()
 
 	if _phase_timer > 0.0:
 		_phase_timer -= delta
@@ -272,21 +282,29 @@ func _physics_process(delta: float) -> void:
 		# Score before catches: a made basket has to register before anyone is
 		# credited with grabbing the ball out of the net.
 		_check_scoring()
-		_check_catches()
-		_check_out_of_bounds()
-		clock.tick(delta)
+		if ctx.is_live() and _period_pending and ball.shot_has_fallen():
+			_resolve_miss()
+			if ctx.phase != MatchContext.Phase.FREE_THROW:
+				_complete_period()
+		if ctx.is_live() and not _period_pending and ball.shot_has_fallen():
+			clock.shot_in_flight = false
+			_resolve_miss()
+		if ctx.is_live() and not _period_pending:
+			_check_catches()
+		if ctx.is_live() and not _period_pending:
+			_check_out_of_bounds()
+		if ctx.is_live():
+			clock.tick(delta)
+	_set_play_permissions()
 
 	if touch != null:
 		touch.clear_edges()
 
 
 func _update_context() -> void:
-	ctx.carrier = null
-	for team_index in 2:
-		for pawn: PlayerPawn in squads[team_index]:
-			if pawn.has_ball:
-				ctx.carrier = pawn
-				ctx.possession = team_index
+	ctx.carrier = ball.holder as PlayerPawn if ball.state == Ball.State.HELD else null
+	if ctx.carrier != null:
+		ctx.possession = ctx.carrier.team_index
 	ctx.shot_clock = clock.shot_clock
 	ctx.quarter_remaining = clock.remaining
 	ctx.predicted_rebound = MatchContext.landing_point(ball, 1.2)
@@ -357,36 +375,49 @@ func _offer_pass_to_target() -> void:
 
 
 func _award_possession(pawn: PlayerPawn) -> void:
+	if not ctx.is_live() or _period_pending or ball.state == Ball.State.HELD:
+		return
 	var previous_team := ctx.possession
-	var was_shot := ball.state == Ball.State.SHOT
-	if was_shot and not _pending_shot.is_empty():
-		_resolve_miss()
-		if pawn.team_index == previous_team:
+	var intercepted := ball.state == Ball.State.PASS and pawn.team_index != previous_team
+	var passer := ball.last_touched_by
+	var was_loose := ball.state == Ball.State.LOOSE
+	_resolve_miss()
+	# Resolving a shooting foul owns the restart, including this catch.
+	if not ctx.is_live():
+		return
+	if pawn.team_index == previous_team and clock.shot_clock <= 0.0 and not ball.touched_rim:
+		_on_shot_clock_expired()
+		return
+	if _rebound_team >= 0:
+		box.add(pawn.get_instance_id(), "reb")
+		box.clear_assists()
+		if pawn.team_index == _rebound_team and ball.touched_rim:
 			clock.offensive_rebound_reset()
-			box.add(pawn.get_instance_id(), "reb")
-		else:
-			clock.reset_shot_clock()
-			box.add(pawn.get_instance_id(), "reb")
-	elif ball.state == Ball.State.PASS and ball.pass_target != pawn.get_instance_id():
-		# Intercepted.
-		events["steals_from_pass"] = int(events["steals_from_pass"]) + 1
+		_rebound_team = -1
+	if intercepted:
+		events["steals_from_pass"] += 1
 		box.add(pawn.get_instance_id(), "stl")
-		if ctx.carrier != null:
-			box.add(ctx.carrier.get_instance_id(), "to")
-		clock.reset_shot_clock()
-
-	events["catches"] = int(events["catches"]) + 1
-	if ball.state == Ball.State.LOOSE:
-		events["loose_pickups"] = int(events["loose_pickups"]) + 1
+		box.add(passer, "to")
 	if pawn.team_index != previous_team:
-		events["possessions"] = int(events["possessions"]) + 1
+		events["possessions"] += 1
+		clock.reset_shot_clock()
+		box.clear_assists()
+	clock.shot_in_flight = false
+	events["catches"] += 1
+	if was_loose:
+		events["loose_pickups"] += 1
 	pawn.take_ball(ball)
+	ctx.carrier = pawn
 	ctx.possession = pawn.team_index
 	ctx.phase = MatchContext.Phase.LIVE
 	clock.running = true
 
 
 func _check_scoring() -> void:
+	if _pending_shot.is_empty() or ball.state != Ball.State.SHOT:
+		return
+	if not ctx.is_live() and ctx.phase != MatchContext.Phase.FREE_THROW:
+		return
 	for hoop in hoops:
 		var points := hoop.check_ball(ball)
 		if points <= 0:
@@ -396,19 +427,23 @@ func _check_scoring() -> void:
 
 
 func _score(basket: int, points: int) -> void:
+	if _pending_shot.is_empty() or ctx.phase == MatchContext.Phase.OVER:
+		return
+	var attempt := _pending_shot.duplicate()
+	_pending_shot.clear()
 	var scoring_team := basket
-	var shooter_id := -1
-	if not _pending_shot.is_empty():
-		shooter_id = int(_pending_shot["shooter"])
-		points = int(_pending_shot["points"])
-		scoring_team = int(_pending_shot["team"])
-		_pending_shot.clear()
-
-	if shooter_id >= 0:
+	var shooter_id := int(attempt["shooter"])
+	if int(attempt["team"]) == basket:
+		points = int(attempt["points"])
 		box.record_basket(shooter_id, points, clock.quarter)
-		box.credit_assist(shooter_id, _elapsed)
+		if points > 1:
+			box.credit_assist(shooter_id, _elapsed)
 	else:
-		box.team_points[scoring_team] += points
+		points = 2
+		box.record_miss(shooter_id, int(attempt["points"]))
+		box.record_team_basket(basket, points, clock.quarter)
+	_rebound_team = -1
+	ball.park()
 
 	if _verbose:
 		print("  -> MADE %d" % points)
@@ -416,7 +451,7 @@ func _score(basket: int, points: int) -> void:
 	Sound.play("swish", -2.0)
 	Sound.react(0.75 if points == 3 else 0.45)
 	if ctx.phase == MatchContext.Phase.FREE_THROW:
-		# The sequence decides what happens next, not the basket.
+		_free_throws["made"] = true
 		return
 	if not _pending_foul.is_empty():
 		var fouled: PlayerPawn = _pending_foul["fouled"]
@@ -424,6 +459,9 @@ func _score(basket: int, points: int) -> void:
 		hud.announce("AND ONE", true)
 		Sound.react(0.9)
 		_begin_free_throws(fouled, 1)
+		return
+	if _period_pending:
+		_complete_period()
 		return
 	hud.announce("%d PTS" % points, points == 3)
 	_dead_ball(1 - scoring_team, INBOUND_PAUSE, true)
@@ -459,6 +497,8 @@ func _check_out_of_bounds() -> void:
 	if position.y > 0.6 and ball.linear_velocity.y > -0.5:
 		return
 	_resolve_miss()
+	if not ctx.is_live():
+		return
 	var to_team := 1 - _last_touch_team()
 	events["out_of_bounds"] = int(events["out_of_bounds"]) + 1
 	Sound.play("whistle", -6.0)
@@ -537,7 +577,7 @@ func _call_foul(offender: PlayerPawn, fouled: PlayerPawn, shot_free_throws: int)
 	box.add(offender.get_instance_id(), "pf")
 	Sound.play("whistle", -5.0)
 
-	var in_bonus: bool = team_fouls[team] > BONUS_FOULS
+	var in_bonus: bool = team_fouls[team] >= BONUS_FOULS
 	if shot_free_throws > 0:
 		# The shot still counts. Whether it falls decides between an and-one
 		# and a full trip to the line, so the free throws wait for it.
@@ -565,6 +605,7 @@ func _begin_free_throws(shooter: PlayerPawn, attempts: int) -> void:
 		"remaining": attempts,
 		"timer": FREE_THROW_SETUP,
 		"awaiting": false,
+		"made": false,
 		"patience": FREE_THROW_TIMEOUT,
 	}
 	_line_up_free_throw(shooter)
@@ -577,6 +618,8 @@ func _line_up_free_throw(shooter: PlayerPawn) -> void:
 	for team_index in 2:
 		for pawn: PlayerPawn in squads[team_index]:
 			pawn.velocity = Vector3.ZERO
+			pawn.cancel_action()
+			pawn.free_throw_attempt = false
 			pawn.lose_ball()
 			if pawn == shooter:
 				pawn.global_position = Vector3(line_x - sign_x * 0.4, 0.0, 0.0)
@@ -592,75 +635,75 @@ func _line_up_free_throw(shooter: PlayerPawn) -> void:
 			slot += 1
 	ball.set_paused(false)
 	shooter.take_ball(ball)
+	shooter.free_throw_attempt = true
+	ctx.carrier = shooter
+	ctx.possession = shooter.team_index
+	_set_play_permissions()
 
 
 func _tick_free_throws(delta: float) -> void:
 	if _free_throws.is_empty():
 		return
 	var shooter: PlayerPawn = _free_throws["shooter"]
-	if not is_instance_valid(shooter):
-		_end_free_throws()
-		return
-
-	# A player who never takes the shot must not be able to stall the game.
-	_free_throws["patience"] = float(_free_throws["patience"]) - delta
-	if float(_free_throws["patience"]) <= 0.0:
-		_end_free_throws()
-		return
-
 	_free_throws["timer"] = float(_free_throws["timer"]) - delta
 	if float(_free_throws["timer"]) > 0.0:
 		return
-
+	_free_throws["patience"] = float(_free_throws["patience"]) - delta
+	var timed_out := float(_free_throws["patience"]) <= 0.0
 	if not bool(_free_throws["awaiting"]):
-		# The AI shoots itself; a human uses the meter like any other shot.
-		if not shooter.is_user_controlled:
+		if timed_out:
+			box.record_miss(shooter.get_instance_id(), 1)
+			_advance_free_throw(false, true)
+		elif not shooter.is_user_controlled and shooter.state == PlayerPawn.State.LOCOMOTION:
 			shooter.intent.shoot_pressed = true
 			shooter.intent.shoot_held = true
-		if shooter.state == PlayerPawn.State.SHOOT:
-			_free_throws["awaiting"] = true
 		return
+	if bool(_free_throws["made"]):
+		_advance_free_throw(true)
+	elif ball.shot_has_fallen() or timed_out:
+		_resolve_miss()
+		_advance_free_throw(false, timed_out)
 
-	# Released and resolved: the ball is no longer in the shooter's hands and
-	# has finished its trip to the rim.
-	if shooter.has_ball:
-		return
-	if ball.state == Ball.State.SHOT and not ball.rebound_ready:
-		return
+
+func _advance_free_throw(made: bool, violation := false) -> void:
+	var shooter: PlayerPawn = _free_throws["shooter"]
 	_free_throws["remaining"] = int(_free_throws["remaining"]) - 1
-	if int(_free_throws["remaining"]) <= 0:
-		_end_free_throws()
+	if int(_free_throws["remaining"]) > 0:
+		_free_throws["timer"] = FREE_THROW_GAP
+		_free_throws["awaiting"] = false
+		_free_throws["made"] = false
+		_free_throws["patience"] = FREE_THROW_TIMEOUT
+		_line_up_free_throw(shooter)
 		return
-	_free_throws["timer"] = FREE_THROW_GAP
-	_free_throws["awaiting"] = false
-	_free_throws["patience"] = FREE_THROW_TIMEOUT
-	_line_up_free_throw(shooter)
-
-
-func _end_free_throws() -> void:
-	var shooter: PlayerPawn = _free_throws.get("shooter")
 	_free_throws.clear()
-	_resolve_miss()
-	if shooter == null or not is_instance_valid(shooter):
-		ctx.phase = MatchContext.Phase.LIVE
-		clock.running = true
-		return
-	# The last one is live off the rim if it missed, and a dead ball if it fell.
-	if ball.state == Ball.State.LOOSE and ball.global_position.y > 0.1:
+	shooter.free_throw_attempt = false
+	shooter.cancel_action()
+	if _period_pending:
+		_complete_period()
+	elif made or violation:
+		_dead_ball(1 - shooter.team_index, INBOUND_PAUSE, true)
+	else:
+		_rebound_team = shooter.team_index
 		ctx.phase = MatchContext.Phase.LOOSE_BALL
-		clock.reset_shot_clock()
+		clock.reset_shot_clock(14.0)
 		clock.running = true
-		return
-	_dead_ball(1 - shooter.team_index, INBOUND_PAUSE * 0.7)
+		ball.go_loose()
 
 
 func _on_shot_released(pawn: PlayerPawn, points: int, quality: float) -> void:
-	_resolve_miss()
+	if _period_pending and ctx.phase != MatchContext.Phase.FREE_THROW:
+		return
+	if not ctx.is_live() and ctx.phase != MatchContext.Phase.FREE_THROW:
+		return
+	if not _pending_shot.is_empty() or ball.state != Ball.State.SHOT:
+		return
 	if _try_block(pawn):
 		return
 	if ctx.phase == MatchContext.Phase.FREE_THROW:
 		points = 1
 		ball.shot_points = 1
+		_free_throws["awaiting"] = true
+		_free_throws["patience"] = 8.0
 	_pending_shot = {"shooter": pawn.get_instance_id(), "points": points,
 		"team": pawn.team_index, "quality": quality}
 	events["shots"] = int(events["shots"]) + 1
@@ -672,8 +715,13 @@ func _on_shot_released(pawn: PlayerPawn, points: int, quality: float) -> void:
 	events["shot_quality_sum"] = float(events["shot_quality_sum"]) + quality
 	events["shot_distance_sum"] = float(events["shot_distance_sum"]) \
 		+ pawn.distance_to_rim()
-	_maybe_shooting_foul(pawn, points)
-	ctx.phase = MatchContext.Phase.SHOT_IN_FLIGHT
+	for hoop in hoops:
+		hoop.reset_tracking(ball.global_position)
+	if ctx.phase != MatchContext.Phase.FREE_THROW:
+		_rebound_team = pawn.team_index
+		clock.shot_in_flight = true
+		_maybe_shooting_foul(pawn, points)
+		ctx.phase = MatchContext.Phase.SHOT_IN_FLIGHT
 
 
 # A defender already in the air, whose reach covers the ball, gets a swing at
@@ -714,6 +762,8 @@ func _reject(defender: PlayerPawn, shooter: PlayerPawn) -> void:
 	ball.release(away.normalized() * _rng.randf_range(3.5, 6.5)
 		+ Vector3.UP * _rng.randf_range(1.0, 2.4), Vector3(4.0, 0.0, 0.0),
 		Ball.State.LOOSE)
+	ball.last_touched_by = defender.get_instance_id()
+	_rebound_team = shooter.team_index
 	ctx.phase = MatchContext.Phase.LOOSE_BALL
 	Sound.play("rim", -6.0, 1.25)
 	Sound.react(0.85)
@@ -724,7 +774,7 @@ func _reject(defender: PlayerPawn, shooter: PlayerPawn) -> void:
 # Heavy contact on a shot sends the shooter to the line. Decided from how tight
 # the nearest defender actually was, so it tracks what you can see.
 func _maybe_shooting_foul(shooter: PlayerPawn, points: int) -> void:
-	if ctx.phase == MatchContext.Phase.FREE_THROW or _balance_run:
+	if ctx.phase == MatchContext.Phase.FREE_THROW:
 		return
 	var nearest: PlayerPawn = null
 	var closest := 1.15
@@ -743,6 +793,8 @@ func _maybe_shooting_foul(shooter: PlayerPawn, points: int) -> void:
 
 
 func _on_ball_passed(passer: PlayerPawn, target: PlayerPawn) -> void:
+	if not ctx.is_live() or _period_pending:
+		return
 	events["passes"] = int(events["passes"]) + 1
 	box.note_pass(passer.get_instance_id(), target.get_instance_id(), _elapsed)
 
@@ -750,7 +802,7 @@ func _on_ball_passed(passer: PlayerPawn, target: PlayerPawn) -> void:
 # A reach-in either takes the ball or leaves the defender out of the play.
 # Handling it here rather than in the pawn keeps the box score in one place.
 func _on_steal_attempt(thief: PlayerPawn, target: PlayerPawn) -> void:
-	if target == null or not target.has_ball:
+	if not ctx.is_live() or _period_pending or target == null or not target.has_ball:
 		return
 	var edge := (float(thief.data["stl"]) - float(target.data["hnd"])) / 220.0
 	if _rng.randf() >= clampf(0.12 + edge, 0.03, 0.42):
@@ -767,15 +819,18 @@ func _on_steal_attempt(thief: PlayerPawn, target: PlayerPawn) -> void:
 	# Knock it toward the thief rather than teleporting it into their hands.
 	var away := (thief.global_position - target.global_position).normalized()
 	ball.linear_velocity = away * 3.4 + Vector3.UP * 1.2
+	ball.last_touched_by = thief.get_instance_id()
+	box.clear_assists()
 	box.add(thief.get_instance_id(), "stl")
 	box.add(target.get_instance_id(), "to")
-	clock.reset_shot_clock()
 	Sound.play("squeak", -8.0)
 	Sound.react(0.5)
 	hud.announce("STEAL", false)
 
 
 func _on_dunk(pawn: PlayerPawn) -> void:
+	if not ctx.is_live() or _period_pending:
+		return
 	events["dunks"] = int(events["dunks"]) + 1
 	# A walk-up put-down and a full-speed hammer should not land the same.
 	var power := pawn.dunk_power
@@ -785,27 +840,45 @@ func _on_dunk(pawn: PlayerPawn) -> void:
 	Sound.play("rim", -2.0 + power * 4.0, 0.92 - power * 0.12)
 	Sound.play("cheer", -6.0 + power * 5.0)
 	Sound.react(0.7 + power * 0.3)
-	Sound.react(1.0)
 	hud.announce("SLAM", true)
 
 
 func _on_shot_clock_expired() -> void:
+	if not ctx.is_live() or _period_pending:
+		return
 	events["shot_clock"] = int(events["shot_clock"]) + 1
 	Sound.play("buzzer", -8.0)
 	hud.announce("SHOT CLOCK", false)
 	_resolve_miss()
-	_dead_ball(1 - ctx.possession, INBOUND_PAUSE * 0.8)
+	if ctx.is_live():
+		_dead_ball(1 - ctx.possession, INBOUND_PAUSE * 0.8)
 
 
 func _on_quarter_expired(_quarter: int) -> void:
-	_resolve_miss()
+	if ctx.phase == MatchContext.Phase.OVER or _period_pending:
+		return
+	_period_pending = true
+	clock.running = false
+	Sound.play("buzzer", -4.0)
+	_set_play_permissions()
+	if not _pending_shot.is_empty():
+		return
+	_complete_period()
+
+
+func _complete_period() -> void:
+	if ctx.phase == MatchContext.Phase.OVER:
+		return
+	_period_pending = false
+	ball.park()
+	_rebound_team = -1
+	_cancel_player_actions()
 	if clock.quarter >= clock.quarters and box.team_points[0] != box.team_points[1]:
 		_finish()
 		return
 	ctx.phase = MatchContext.Phase.DEAD
 	_phase_timer = QUARTER_BREAK
 	_resume_phase = MatchContext.Phase.INBOUND
-	Sound.play("buzzer", -4.0)
 	hud.announce("END OF %s" % clock.period_name(), false)
 
 
@@ -834,6 +907,8 @@ func _position_for_tipoff() -> void:
 		var others: Array[PlayerPawn] = []
 		for pawn: PlayerPawn in squads[team_index]:
 			pawn.velocity = Vector3.ZERO
+			pawn.cancel_action()
+			pawn.free_throw_attempt = false
 			pawn.lose_ball()
 			pawn.intent.reset()
 			if pawn == _tipoff_jumpers[team_index]:
@@ -916,6 +991,12 @@ func _tip_target(tipper: PlayerPawn) -> PlayerPawn:
 
 
 func _dead_ball(to_team: int, pause: float, from_baseline := false) -> void:
+	if ctx.phase == MatchContext.Phase.OVER:
+		return
+	_pending_shot.clear()
+	_pending_foul.clear()
+	_rebound_team = -1
+	box.clear_assists()
 	ctx.phase = MatchContext.Phase.DEAD
 	clock.running = false
 	ball.go_loose()
@@ -926,6 +1007,8 @@ func _dead_ball(to_team: int, pause: float, from_baseline := false) -> void:
 
 
 func _resume_play() -> void:
+	if ctx.phase == MatchContext.Phase.OVER:
+		return
 	if _resume_phase == MatchContext.Phase.INBOUND:
 		team_fouls = [0, 0] as Array[int]
 		if not clock.advance_quarter():
@@ -952,6 +1035,8 @@ func _position_for_inbound(to_team: int, from_baseline := false) -> void:
 	for team_index in 2:
 		for pawn: PlayerPawn in squads[team_index]:
 			pawn.velocity = Vector3.ZERO
+			pawn.cancel_action()
+			pawn.free_throw_attempt = false
 			pawn.lose_ball()
 			pawn.global_position = _formation_spot(pawn, team_index, to_team,
 				from_baseline)
@@ -960,13 +1045,7 @@ func _position_for_inbound(to_team: int, from_baseline := false) -> void:
 		if int(pawn.data["pos"]) == League.Pos.PG:
 			handler = pawn
 			break
-	if from_baseline:
-		# Behind the endline, where the ball is actually taken from. A held
-		# ball is exempt from the out of bounds check, so standing there is
-		# legal until they step in with it.
-		handler.global_position = Vector3(
-			-sign_x * (CourtMetrics.HALF_LENGTH + 0.8), 0.0,
-			clampf(handler.global_position.z, -2.4, 2.4))
+
 	ball.set_paused(false)
 	handler.take_ball(ball)
 	ctx.possession = to_team
@@ -995,6 +1074,16 @@ func _formation_spot(pawn: PlayerPawn, team_index: int, offence_team: int,
 
 
 func _finish() -> void:
+	if ctx.phase == MatchContext.Phase.OVER:
+		return
+	_phase_timer = 0.0
+	_pending_shot.clear()
+	_pending_foul.clear()
+	_free_throws.clear()
+	_rebound_team = -1
+	ball.park()
+	_cancel_player_actions()
+	ctx.carrier = null
 	ctx.phase = MatchContext.Phase.OVER
 	clock.running = false
 	var result := {
@@ -1008,6 +1097,30 @@ func _finish() -> void:
 	Game.last_box_score = result
 	finished.emit(result)
 	hud.show_final(result)
-	if not _balance_run:
-		await get_tree().create_timer(4.0).timeout
-		Game.goto("res://scenes/box_score.tscn")
+	_set_play_permissions()
+
+
+func _cancel_player_actions() -> void:
+	for squad in squads:
+		for pawn: PlayerPawn in squad:
+			pawn.cancel_action()
+			pawn.lose_ball()
+			pawn.free_throw_attempt = false
+
+
+func _set_play_permissions() -> void:
+	for squad in squads:
+		for pawn: PlayerPawn in squad:
+			var live := ctx.is_live() and not _period_pending
+			var at_line := ctx.phase == MatchContext.Phase.FREE_THROW \
+				and _free_throws.get("shooter") == pawn \
+				and float(_free_throws.get("timer", 1.0)) <= 0.0
+			pawn.actions_enabled = live or at_line
+			pawn.movement_enabled = live
+			if not live and not at_line and ctx.phase != MatchContext.Phase.TIPOFF:
+				pawn.cancel_action()
+
+
+func _on_rim_contact() -> void:
+	if ctx.is_live() and not _period_pending and not _pending_shot.is_empty():
+		clock.reset_shot_clock(14.0)
