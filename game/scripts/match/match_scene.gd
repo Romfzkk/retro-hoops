@@ -6,7 +6,14 @@ extends Node3D
 signal finished(result: Dictionary)
 
 const INBOUND_PAUSE := 1.1
-const TIPOFF_PAUSE := 1.4
+const TIPOFF_SET := 1.3
+## Puts the apex around 3.9m, above a standing reach but inside a jump.
+const TIPOFF_TOSS := 6.3
+const TIPOFF_CONTEST_HEIGHT := 3.15
+## How much of the tip is a coin flip rather than reach and hops.
+const TIPOFF_LUCK := 0.30
+const TIPOFF_TAP_TIME := 0.75
+const TIPOFF_GIVE_UP := 3.0
 const QUARTER_BREAK := 2.4
 const CATCH_RADIUS := 0.95
 const OUT_OF_BOUNDS_MARGIN := 0.25
@@ -46,6 +53,9 @@ var _verbose := false
 
 var _pending_shot := {}
 var _phase_timer := 0.0
+var _tipoff_step := 0
+var _tipoff_timer := 0.0
+var _tipoff_jumpers: Array[PlayerPawn] = []
 var _resume_phase: MatchContext.Phase = MatchContext.Phase.LIVE
 var _elapsed := 0.0
 var _rng := RandomNumberGenerator.new()
@@ -240,6 +250,11 @@ func _physics_process(delta: float) -> void:
 		_phase_timer -= delta
 		if _phase_timer <= 0.0:
 			_resume_play()
+
+	if ctx.phase == MatchContext.Phase.TIPOFF:
+		if not setup.online or Net.is_host():
+			_tick_tipoff(delta)
+		return
 
 	for controller in humans:
 		controller.tick(delta, ctx)
@@ -753,9 +768,108 @@ func _on_quarter_expired(_quarter: int) -> void:
 
 func _begin_tipoff() -> void:
 	ctx.phase = MatchContext.Phase.TIPOFF
-	_position_for_inbound(_rng.randi_range(0, 1))
-	_phase_timer = TIPOFF_PAUSE
-	_resume_phase = MatchContext.Phase.LIVE
+	clock.running = false
+	_phase_timer = 0.0
+	_tipoff_jumpers = [_tallest(squads[0]), _tallest(squads[1])]
+	_position_for_tipoff()
+	_tipoff_step = 0
+	_tipoff_timer = TIPOFF_SET
+	hud.announce("JUMP BALL", false)
+
+
+func _tallest(squad: Array) -> PlayerPawn:
+	var best: PlayerPawn = squad[0]
+	for pawn: PlayerPawn in squad:
+		if pawn.standing_reach() > best.standing_reach():
+			best = pawn
+	return best
+
+
+func _position_for_tipoff() -> void:
+	for team_index in 2:
+		var sign_x := CourtMetrics.attack_sign(team_index)
+		var others: Array[PlayerPawn] = []
+		for pawn: PlayerPawn in squads[team_index]:
+			pawn.velocity = Vector3.ZERO
+			pawn.lose_ball()
+			pawn.intent.reset()
+			if pawn == _tipoff_jumpers[team_index]:
+				pawn.global_position = Vector3(-sign_x * 0.55, 0.0, 0.0)
+				continue
+			others.append(pawn)
+		# The rest ring their own half of the circle, facing the toss.
+		for i in others.size():
+			var spread := float(i) / maxf(float(others.size() - 1), 1.0) - 0.5
+			var angle := spread * PI * 0.75
+			var spot := Vector3(-sign_x * cos(angle) * (CourtMetrics.CIRCLE_RADIUS + 1.4),
+				0.0, sin(angle) * (CourtMetrics.CIRCLE_RADIUS + 2.8))
+			others[i].global_position = spot
+	ball.go_loose()
+	ball.set_paused(true)
+	ball.global_position = Vector3(0.0, 1.7, 0.0)
+
+
+func _tick_tipoff(delta: float) -> void:
+	_tipoff_timer -= delta
+	match _tipoff_step:
+		0:
+			if _tipoff_timer <= 0.0:
+				_toss_tipoff()
+		1:
+			# Both go up as the toss tops out, not on the way to it.
+			if ball.linear_velocity.y <= 0.0 or _tipoff_timer < -TIPOFF_GIVE_UP:
+				for jumper in _tipoff_jumpers:
+					jumper.contest_jump()
+				_tipoff_step = 2
+		2:
+			# The give-up is not decoration: a toss that catches the jumbotron
+			# would otherwise leave the match sitting on a dead clock forever.
+			if ball.global_position.y <= TIPOFF_CONTEST_HEIGHT 					or _tipoff_timer < -TIPOFF_GIVE_UP * 2.0:
+				_resolve_tipoff()
+
+
+func _toss_tipoff() -> void:
+	ball.set_paused(false)
+	ball.launch(Vector3(0.0, 1.9, 0.0), Vector3.UP * TIPOFF_TOSS,
+		Vector3.ZERO, Ball.State.LOOSE)
+	Sound.play("whistle", -10.0)
+	_tipoff_step = 1
+
+
+func _resolve_tipoff() -> void:
+	var reach: Array[float] = []
+	for jumper in _tipoff_jumpers:
+		reach.append(jumper.standing_reach() + jumper.jump_height()
+			+ _rng.randf_range(0.0, TIPOFF_LUCK))
+	var winner := 0 if reach[0] >= reach[1] else 1
+	var tipper: PlayerPawn = _tipoff_jumpers[winner]
+	var target := _tip_target(tipper)
+
+	# Tapped, not caught: it stays a loose ball anyone can go and get.
+	var from := ball.global_position
+	ball.launch(from, ShotSolver.launch_velocity(from,
+		target.global_position + Vector3.UP * 1.2, TIPOFF_TAP_TIME),
+		Vector3.ZERO, Ball.State.LOOSE)
+
+	ctx.phase = MatchContext.Phase.LIVE
+	ctx.possession = winner
+	clock.reset_shot_clock()
+	clock.running = true
+	hud.announce("%s WINS THE TIP" % (setup.home if winner == 0 else setup.away)["abbr"], false)
+	Sound.react(0.45)
+
+
+func _tip_target(tipper: PlayerPawn) -> PlayerPawn:
+	var best: PlayerPawn = null
+	var best_distance := INF
+	for pawn: PlayerPawn in squads[tipper.team_index]:
+		if pawn == tipper:
+			continue
+		var distance := pawn.global_position.distance_to(tipper.global_position)
+		if distance < best_distance:
+			best_distance = distance
+			best = pawn
+	return best if best != null else tipper
 
 
 func _dead_ball(to_team: int, pause: float) -> void:
@@ -774,6 +888,8 @@ func _resume_play() -> void:
 		if not clock.advance_quarter():
 			if box.team_points[0] == box.team_points[1]:
 				clock.start_overtime()
+				_begin_tipoff()
+				return
 			else:
 				_finish()
 				return

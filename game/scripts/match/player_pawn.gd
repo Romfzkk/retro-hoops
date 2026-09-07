@@ -264,7 +264,7 @@ func _offence_inputs() -> void:
 
 func _defence_inputs() -> void:
 	if intent.shoot_pressed:
-		_begin_contest_jump()
+		contest_jump()
 	elif intent.pass_pressed and _ball_carrier_in_reach() != null:
 		_begin_steal()
 
@@ -530,7 +530,8 @@ func _release_layup() -> void:
 	shot_released.emit(self, 2, accuracy)
 
 
-func _begin_contest_jump() -> void:
+## Straight up off both feet, for a contested rebound or the opening tip.
+func contest_jump() -> void:
 	if not is_on_floor():
 		return
 	_enter(State.JUMP)

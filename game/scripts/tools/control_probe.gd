@@ -111,6 +111,10 @@ func _all_pawns() -> Array:
 
 
 func _physics_process(delta: float) -> void:
+	# The timeline starts once the tip is over; nothing the probe presses is
+	# read while the match is still setting up.
+	if match_scene.ctx.phase == MatchContext.Phase.TIPOFF:
+		return
 	_elapsed += delta
 	while _step < _script.size() and _elapsed >= float(_script[_step]["at"]):
 		_run(_script[_step])

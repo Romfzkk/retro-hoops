@@ -42,7 +42,8 @@ func _process(delta: float) -> void:
 			wanted_eye = pair[0]
 			wanted_look = pair[1]
 		Settings.CameraMode.HIGH:
-			wanted_eye = Vector3(focus_point.x * 0.4, 21.0, 11.5)
+			wanted_eye = Vector3(focus_point.x * 0.4,
+				ArenaBuilder.roof_height() - 2.4, 11.5)
 			wanted_look = Vector3(focus_point.x * 0.7, 0.0, focus_point.z * 0.3)
 		Settings.CameraMode.COURTSIDE:
 			wanted_eye = Vector3(focus_point.x * 0.35, 2.4, SIDELINE_Z - 8.0)
@@ -52,6 +53,10 @@ func _process(delta: float) -> void:
 			wanted_eye = Vector3(sign_x * (CourtMetrics.HALF_LENGTH + 5.0), 5.4,
 				focus_point.z * 0.25)
 			wanted_look = Vector3(focus_point.x, 1.6, focus_point.z)
+
+	# Outside the building every mode renders the underside of the roof, which
+	# is an unlit black wall filling the screen.
+	wanted_eye.y = minf(wanted_eye.y, ArenaBuilder.roof_height() - 1.2)
 
 	var damping := clampf(delta * 3.6, 0.0, 1.0)
 	_eye = _eye.lerp(wanted_eye, damping)
