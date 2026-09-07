@@ -15,6 +15,7 @@ const BONUS_FOULS := 5
 const FREE_THROW_SETUP := 1.3
 const FREE_THROW_GAP := 0.9
 const FREE_THROW_TIMEOUT := 15.0
+const BLOCK_REACH := 1.7
 
 var setup: MatchSetup
 var ctx := MatchContext.new()
@@ -30,6 +31,7 @@ var humans: Array[HumanController] = []
 var hud: MatchHud
 var touch: TouchControls
 var markers: Array[PlayerMarker] = []
+var crowd: Crowd
 
 var events := {"out_of_bounds": 0, "shot_clock": 0, "possessions": 0,
 	"dunks": 0, "shot_quality_sum": 0.0, "shot_distance_sum": 0.0, "shots": 0,
@@ -88,8 +90,10 @@ func _ready() -> void:
 	ctx.ball = ball
 	ctx.teams = squads
 	ctx.difficulty = setup.difficulty
+	crowd = get_tree().get_first_node_in_group("crowd") as Crowd
 	_begin_tipoff()
 	FrameCapture.attach(self)
+	FrameCapture.FpsProbe.attach(self)
 	SimProbe.attach(self)
 
 
@@ -269,6 +273,10 @@ func _update_context() -> void:
 
 	for i in markers.size():
 		markers[i].target = humans[i].active if i < humans.size() else null
+
+	if crowd != null:
+		# The stands stand up for the same things the crowd bed reacts to.
+		crowd.set_excitement(Sound.crowd_level())
 
 	camera.focus_point = ball.global_position
 	camera.attack_basket = ctx.possession
@@ -563,6 +571,8 @@ func _end_free_throws() -> void:
 
 func _on_shot_released(pawn: PlayerPawn, points: int, quality: float) -> void:
 	_resolve_miss()
+	if _try_block(pawn):
+		return
 	if ctx.phase == MatchContext.Phase.FREE_THROW:
 		points = 1
 		ball.shot_points = 1
@@ -581,6 +591,51 @@ func _on_shot_released(pawn: PlayerPawn, points: int, quality: float) -> void:
 	ctx.phase = MatchContext.Phase.SHOT_IN_FLIGHT
 
 
+# A defender already in the air, whose reach covers the ball, gets a swing at
+# it. Without this the block rating does nothing at all.
+func _try_block(shooter: PlayerPawn) -> bool:
+	if ctx.phase == MatchContext.Phase.FREE_THROW:
+		return false
+	var release_height := ball.global_position.y
+	for defender: PlayerPawn in squads[1 - shooter.team_index]:
+		if defender.is_on_floor():
+			continue
+		var offset := defender.global_position - shooter.global_position
+		if Vector2(offset.x, offset.z).length() > BLOCK_REACH:
+			continue
+		# Their hand has to actually get up to the ball.
+		var reach := defender.global_position.y + defender.standing_reach()
+		if reach < release_height - 0.1:
+			continue
+		var skill := float(defender.data["blk"]) / 99.0
+		var over := clampf((reach - release_height) / 0.6, 0.0, 1.0)
+		if _rng.randf() >= clampf(0.015 + skill * 0.11 * over, 0.005, 0.14):
+			continue
+		_reject(defender, shooter)
+		return true
+	return false
+
+
+func _reject(defender: PlayerPawn, shooter: PlayerPawn) -> void:
+	box.add(defender.get_instance_id(), "blk")
+	box.record_miss(shooter.get_instance_id(), ball.shot_points)
+	_pending_shot.clear()
+
+	# Swat it away from the rim rather than teleporting possession.
+	var away := (shooter.global_position - CourtMetrics.rim_position(shooter.basket))
+	away.y = 0.0
+	if away.length() < 0.1:
+		away = Vector3.FORWARD
+	ball.release(away.normalized() * _rng.randf_range(3.5, 6.5)
+		+ Vector3.UP * _rng.randf_range(1.0, 2.4), Vector3(4.0, 0.0, 0.0),
+		Ball.State.LOOSE)
+	ctx.phase = MatchContext.Phase.LOOSE_BALL
+	Sound.play("rim", -6.0, 1.25)
+	Sound.react(0.85)
+	camera.shake(0.55)
+	hud.announce("BLOCKED", true)
+
+
 # Heavy contact on a shot sends the shooter to the line. Decided from how tight
 # the nearest defender actually was, so it tracks what you can see.
 func _maybe_shooting_foul(shooter: PlayerPawn, points: int) -> void:
@@ -597,7 +652,7 @@ func _maybe_shooting_foul(shooter: PlayerPawn, points: int) -> void:
 		return
 	# Only a defender who left their feet into the shooter draws it.
 	var clumsiness := 1.0 - float(nearest.data["def"]) / 150.0
-	if _rng.randf() >= clampf(0.14 + clumsiness * 0.22, 0.05, 0.38):
+	if _rng.randf() >= clampf(0.05 + clumsiness * 0.13, 0.02, 0.20):
 		return
 	_call_foul(nearest, shooter, points)
 
@@ -617,7 +672,7 @@ func _on_steal_attempt(thief: PlayerPawn, target: PlayerPawn) -> void:
 		# A reach that misses is a reach that might get called. Poor defenders
 		# foul more, which is what the defence rating should actually cost you.
 		var clumsiness := 1.0 - float(thief.data["def"]) / 140.0
-		if _rng.randf() < clampf(0.10 + clumsiness * 0.22, 0.05, 0.34):
+		if _rng.randf() < clampf(0.06 + clumsiness * 0.16, 0.03, 0.24):
 			_call_foul(thief, target, 0)
 			return
 		thief.stumble()
@@ -638,6 +693,8 @@ func _on_steal_attempt(thief: PlayerPawn, target: PlayerPawn) -> void:
 func _on_dunk(pawn: PlayerPawn) -> void:
 	events["dunks"] = int(events["dunks"]) + 1
 	camera.shake(1.0)
+	if not _balance_run:
+		hoops[pawn.basket].flex(1.0)
 	Sound.play("rim", 0.0, 0.86)
 	Sound.play("cheer", -3.0)
 	Sound.react(1.0)

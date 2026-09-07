@@ -51,6 +51,7 @@ static func build(parent: Node3D, team: Dictionary, seats: Array[Transform3D],
 	crowd._material = ShaderMaterial.new()
 	crowd._material.shader = shader
 	crowd.material_override = crowd._material
+	crowd.add_to_group("crowd")
 	parent.add_child(crowd)
 	return crowd
 

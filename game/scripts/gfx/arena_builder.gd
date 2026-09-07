@@ -302,6 +302,7 @@ static func _add_lights(parent: Node3D, arena: Dictionary) -> void:
 			# Only one rank casts shadows; eight shadow maps buys nothing.
 			spot.shadow_enabled = z > 0.0
 			spot.shadow_blur = 2.0
+			spot.light_volumetric_fog_energy = 1.6
 			parent.add_child(spot)
 
 
@@ -342,6 +343,18 @@ static func _add_environment(parent: Node3D, arena: Dictionary) -> void:
 	env.adjustment_enabled = true
 	env.adjustment_contrast = 1.04
 	env.adjustment_saturation = 1.06
+
+	# Haze in the air so the rigs throw visible shafts down onto the floor.
+	# Volumetric fog is a Forward+ feature, and it is not cheap enough to ask a
+	# phone for.
+	if not outdoor and not OS.has_feature("mobile"):
+		env.volumetric_fog_enabled = true
+		env.volumetric_fog_density = 0.0025
+		env.volumetric_fog_albedo = Color(0.80, 0.84, 0.94)
+		env.volumetric_fog_ambient_inject = 0.0
+		env.volumetric_fog_emission_energy = 0.0
+		env.volumetric_fog_length = 42.0
+		env.volumetric_fog_gi_inject = 0.0
 
 	world.environment = env
 	parent.add_child(world)

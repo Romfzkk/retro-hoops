@@ -14,6 +14,8 @@ const CUT_DURATION := 1.6
 const PATIENCE := 4.0
 const SHOT_APPETITE := 0.40
 const PASS_APPETITE := 0.30
+## Rolled once per decision, not once per frame.
+const REACH_IN_CHANCE := 0.05
 
 # Half-court spots as (distance from baseline, offset from centre), indexed by
 # lineup slot. The lineup is built in position order, so slot 0 is the point.
@@ -71,7 +73,7 @@ func tick(delta: float, ctx: MatchContext) -> void:
 			else:
 				_space(pawn, ctx, delta)
 		else:
-			_defend(pawn, ctx)
+			_defend(pawn, ctx, refresh)
 
 
 func _idle(pawn: PlayerPawn, ctx: MatchContext) -> void:
@@ -114,9 +116,12 @@ func _drive_decision(pawn: PlayerPawn, ctx: MatchContext, refresh: bool) -> void
 		# Only a genuinely open lane is worth attacking; otherwise take the
 		# jumper rather than charging into help every single possession.
 		if distance < 2.8 and lane_open:
-			shoot_score += 0.40
+			shoot_score += 0.20
 		elif distance < 2.8:
-			shoot_score -= 0.25
+			shoot_score -= 0.30
+		# An open look from range is worth as much as a contested drive.
+		if contest < OPEN_CONTEST 				and CourtMetrics.is_behind_three(pawn.global_position, basket):
+			shoot_score += 0.28
 		if desperate:
 			shoot_score += 0.9
 		shoot_score += float(difficulty) * 0.04
@@ -178,7 +183,7 @@ func _space(pawn: PlayerPawn, ctx: MatchContext, delta: float) -> void:
 	_steer(pawn, _spot_for(pawn, ctx), 0.62)
 
 
-func _defend(pawn: PlayerPawn, ctx: MatchContext) -> void:
+func _defend(pawn: PlayerPawn, ctx: MatchContext, refresh: bool) -> void:
 	var man: PlayerPawn = _assignments.get(pawn.get_instance_id())
 	if man == null:
 		man = ctx.nearest(pawn.global_position, ctx.opponents_of(team_index))
@@ -202,7 +207,7 @@ func _defend(pawn: PlayerPawn, ctx: MatchContext) -> void:
 		var separation := pawn.global_position.distance_to(man.global_position)
 		if man.state == PlayerPawn.State.SHOOT and separation < 2.1:
 			pawn.intent.shoot_pressed = true
-		elif separation < 1.4 and _rng.randf() < 0.006 + float(difficulty) * 0.002:
+		elif refresh and separation < 1.4 				and _rng.randf() < REACH_IN_CHANCE + float(difficulty) * 0.01:
 			pawn.intent.pass_pressed = true
 
 

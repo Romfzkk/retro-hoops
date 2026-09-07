@@ -15,6 +15,8 @@ const SCORE_PLANE_DROP := 0.03
 var basket: int = 0
 var rim_position: Vector3
 
+var _ring: MeshInstance3D
+var _flex := 0.0
 var _net_material: ShaderMaterial
 var _previous_ball_y := 0.0
 var _armed := false
@@ -160,7 +162,8 @@ func _add_rim() -> void:
 		shape.position = Vector3(cos(angle), 0.0, sin(angle)) * CourtMetrics.RIM_RADIUS
 		body.add_child(shape)
 
-	var ring := MeshInstance3D.new()
+	_ring = MeshInstance3D.new()
+	var ring := _ring
 	var torus := TorusMesh.new()
 	torus.inner_radius = CourtMetrics.RIM_RADIUS - RIM_TUBE_RADIUS
 	torus.outer_radius = CourtMetrics.RIM_RADIUS + RIM_TUBE_RADIUS
@@ -249,10 +252,21 @@ func _add_stanchion(baseline_x: float, board_centre: Vector3) -> void:
 	add_child(base)
 
 
+## Bend the ring. Springs back on its own.
+func flex(amount: float) -> void:
+	_flex = maxf(_flex, clampf(amount, 0.0, 1.0))
+
+
 func _process(delta: float) -> void:
 	if _swish > 0.0:
 		_swish = maxf(0.0, _swish - delta * 2.6)
 		_net_material.set_shader_parameter("swish", _swish)
+	if _flex > 0.001 and _ring != null:
+		_flex = maxf(0.0, _flex - delta * 3.4)
+		# Tips down toward the court, the way a breakaway ring gives.
+		var tilt := _flex * 0.30
+		_ring.rotation.z = -CourtMetrics.attack_sign(basket) * tilt
+		_ring.position.y = -_flex * 0.05
 
 
 # Called by the match each physics tick. Returns the points scored, or 0.

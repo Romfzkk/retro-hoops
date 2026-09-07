@@ -44,3 +44,43 @@ func _run() -> void:
 	if err != OK:
 		push_error("Screenshot failed: %s" % error_string(err))
 	get_tree().quit(0 if err == OK else 1)
+
+
+## `-- --fps 10` prints frame timing over that many seconds, then quits. Used to
+## check the arena still runs well after visual changes.
+class FpsProbe extends Node:
+	const FPS_ARG := "--fps"
+
+	## Building the arena and baking the court texture costs one long frame.
+	## That is a load cost, not a runtime one, so it is left out of the numbers.
+	const WARMUP := 1.5
+
+	var _warmup := WARMUP
+	var _remaining := 0.0
+	var _measured := 0.0
+	var _frames := 0
+	var _worst := 0.0
+
+	static func attach(host: Node) -> void:
+		if FrameCapture.argument(FPS_ARG).is_empty():
+			return
+		var probe := FpsProbe.new()
+		probe.name = "FpsProbe"
+		host.add_child(probe)
+
+	func _ready() -> void:
+		_remaining = float(FrameCapture.argument(FPS_ARG))
+
+	func _process(delta: float) -> void:
+		if _warmup > 0.0:
+			_warmup -= delta
+			return
+		_frames += 1
+		_measured += delta
+		_worst = maxf(_worst, delta)
+		_remaining -= delta
+		if _remaining > 0.0:
+			return
+		print("fps avg %.1f | worst frame %.1f ms | frames %d (warmup excluded)" % [
+			float(_frames) / maxf(_measured, 0.001), _worst * 1000.0, _frames])
+		get_tree().quit()
