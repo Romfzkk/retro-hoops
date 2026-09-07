@@ -138,6 +138,35 @@ static func team_ovr(team: Dictionary) -> int:
 	return int(round(total / denom))
 
 
+## Tops a team back up to a full roster, keeping whatever is already there.
+## A roster pack that replaces a squad with fewer players than the game needs
+## would otherwise leave a team unable to put five on the floor, and every
+## match involving them breaks.
+static func ensure_full_roster(team: Dictionary, seed_value: int) -> int:
+	var roster: Array = team["roster"]
+	if roster.size() >= ROSTER_SIZE:
+		return 0
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value + int(team["id"]) * 977
+	var added := 0
+	var slots := [Pos.PG, Pos.SG, Pos.SF, Pos.PF, Pos.C,
+		Pos.PG, Pos.SG, Pos.SF, Pos.PF, Pos.C, Pos.SG, Pos.PF]
+	var taken_numbers: Array = []
+	for player in roster:
+		taken_numbers.append(int(player["num"]))
+	while roster.size() < ROSTER_SIZE:
+		var index := roster.size()
+		var num := rng.randi_range(0, 55)
+		while taken_numbers.has(num):
+			num = rng.randi_range(0, 55)
+		taken_numbers.append(num)
+		roster.append(_build_player(int(team["id"]) * 100 + 50 + index,
+			slots[index % slots.size()], 68.0 + rng.randf_range(-5.0, 5.0), num, rng))
+		added += 1
+	roster.sort_custom(func(a, b): return int(a["ovr"]) > int(b["ovr"]))
+	return added
+
+
 static func player_name(p: Dictionary) -> String:
 	return "%s %s" % [p["fn"], p["ln"]]
 

@@ -85,9 +85,15 @@ JDK 17 or newer configured in Godot's editor settings, plus a debug keystore.
 | Pause / back | Esc | Start |
 
 On offence the shoot button charges a meter; release it inside the green window
-for the best result. Release timing and the shooter's ratings both feed the
-same accuracy number, which moves the aim point — the ball is then left alone,
-so a bad shot misses for a reason you can watch.
+for the best result. The meter holds for a moment after the release, marking
+where you let go and whether it was early, late or clean, so the timing is
+learnable rather than guessed at. Release timing and the shooter's ratings both
+feed the same accuracy number, which moves the aim point — the ball is then
+left alone, so a bad shot misses for a reason you can watch.
+
+Close to the rim the same button goes up with the ball instead of settling for
+a jump shot: a layup when you are pointed at the basket, a dunk when you are
+driving with sprint held and have the reach for it.
 
 Player two uses the second connected pad. On phones an on-screen stick and
 buttons appear automatically.

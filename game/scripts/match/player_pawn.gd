@@ -14,14 +14,24 @@ signal steal_attempted(pawn: PlayerPawn, target: PlayerPawn)
 enum State { LOCOMOTION, SHOOT, PASS, DUNK, LAYUP, JUMP, STEAL, STUMBLE }
 
 const GRAVITY := 9.806
-const CHARGE_TIME := 0.72
-const IDEAL_RELEASE := Vector2(0.56, 0.80)
-const OVERCHARGE := 1.25
+const CHARGE_TIME := 0.85
+## Where on the meter a release counts as clean. Wide enough to hit without
+## staring at the bar; the earlier window was 0.18s long, which meant a tap
+## produced the worst shot in the game and nobody could tell why.
+const IDEAL_RELEASE := Vector2(0.44, 0.86)
+const OVERCHARGE := 1.30
+## Even a panicked release is a basketball shot, not a throw at the wall.
+const MIN_RELEASE_QUALITY := 0.30
 const GATHER_TIME := 0.16
 const STEAL_TIME := 0.42
 const STUMBLE_TIME := 0.55
 const DUNK_RANGE := 3.4
-const LAYUP_RANGE := 3.1
+const LAYUP_RANGE := 4.2
+## Below this you go up with it whether or not you are running.
+const STANDING_LAYUP_RANGE := 2.3
+const DRIVE_SPEED := 1.2
+## Dribbles per second, walking to sprinting.
+const DRIBBLE_RATE := Vector2(2.2, 4.1)
 const BODY_RADIUS := 0.38
 const PICKUP_RADIUS := 0.95
 const INTERCEPT_REACH := 0.85
@@ -59,6 +69,7 @@ var _acceleration := 24.0
 var _jump_height := 0.7
 var _rng := RandomNumberGenerator.new()
 var _dribble_phase := 0.0
+var _last_bounce := 0
 var _facing := Vector3.FORWARD
 var _pending_pass: PlayerPawn
 var _net_position := Vector3.ZERO
@@ -155,7 +166,7 @@ func _physics_process(delta: float) -> void:
 		return
 	state_time += delta
 	pickup_cooldown = maxf(0.0, pickup_cooldown - delta)
-	_dribble_phase += delta * TAU * 2.0
+	_tick_dribble(delta)
 
 	match state:
 		State.LOCOMOTION:
@@ -209,6 +220,32 @@ func _tick_remote(delta: float) -> void:
 	animator.tick(delta)
 
 
+# The ball is put on the floor and comes back, at a rate that follows the
+# player. It used to bob at a fixed rate whatever they were doing, which is why
+# moving with it looked like carrying rather than dribbling.
+func _tick_dribble(delta: float) -> void:
+	if not has_ball or has_ball_gathered() or not is_on_floor():
+		# Park at the top of the bounce, where the ball sits in the hand, so
+		# picking it back up never starts with it stuck to the floor.
+		_dribble_phase = PI * 0.5
+		_last_bounce = 0
+		return
+	var travel := Vector3(velocity.x, 0.0, velocity.z)
+	var gait := clampf(travel.length() / maxf(_max_speed, 0.01), 0.0, 1.0)
+	_dribble_phase += delta * PI * lerpf(DRIBBLE_RATE.x, DRIBBLE_RATE.y, gait)
+
+	var bounce := int(_dribble_phase / PI)
+	if bounce == _last_bounce:
+		return
+	_last_bounce = bounce
+	Sound.play("bounce", -13.0, _rng.randf_range(0.94, 1.12))
+	# Moving hard sideways puts the ball in the outside hand, so a change of
+	# direction reads as a crossover instead of the ball sticking to one side.
+	var lateral := _facing.cross(Vector3.UP).dot(travel.normalized())
+	if gait > 0.35 and absf(lateral) > 0.5:
+		ball_hand = signf(lateral)
+
+
 func _tick_locomotion(delta: float) -> void:
 	_walk(delta, 1.0)
 	_face_travel(delta)
@@ -234,15 +271,20 @@ func _defence_inputs() -> void:
 
 func _begin_shot_attempt() -> void:
 	var to_rim := distance_to_rim()
+	var flat := Vector3(velocity.x, 0.0, velocity.z)
 	var heading := (rim() - global_position)
 	heading.y = 0.0
-	var driving := velocity.length() > 2.0 and heading.normalized().dot(
-		Vector3(velocity.x, 0.0, velocity.z).normalized()) > 0.35
+	var driving := flat.length() > DRIVE_SPEED and heading.normalized().dot(
+		flat.normalized()) > 0.2
 	if to_rim < DUNK_RANGE and can_dunk() and driving \
 			and (intent.sprint or intent.special_pressed):
 		_enter(State.DUNK)
 		return
-	if to_rim < LAYUP_RANGE and driving:
+	# Close in and pointed at the rim, going up with it is the shot. Requiring a
+	# hard drive meant a defender bumping you off your run turned the layup you
+	# asked for into a jump shot from two feet.
+	var facing_rim := _facing.dot(heading.normalized()) > 0.3
+	if to_rim < LAYUP_RANGE and (driving or facing_rim or to_rim < STANDING_LAYUP_RANGE):
 		_enter(State.LAYUP)
 		return
 	_enter(State.SHOOT)
@@ -299,13 +341,13 @@ func _release_quality(forced: bool) -> float:
 		# AI and assisted shooting lean on the rating instead of the meter.
 		return 0.34 + float(data["mid"] if not is_user_controlled else 70) / 99.0 * 0.34
 	if forced:
-		return 0.10
+		return MIN_RELEASE_QUALITY
 	var centre := (IDEAL_RELEASE.x + IDEAL_RELEASE.y) * 0.5
 	var half_window := (IDEAL_RELEASE.y - IDEAL_RELEASE.x) * 0.5
 	var error := absf(shot_charge - centre)
 	if error <= half_window:
 		return 1.0 - error / maxf(half_window, 0.001) * 0.15
-	return clampf(0.85 - (error - half_window) * 2.2, 0.0, 0.85)
+	return clampf(0.85 - (error - half_window) * 1.6, MIN_RELEASE_QUALITY, 0.85)
 
 
 func _begin_pass() -> void:
@@ -620,11 +662,14 @@ func _update_ball_anchor(delta: float) -> void:
 			ball_anchor.global_position = global_position \
 				+ Vector3.UP * (standing_reach() - 0.22) + _facing * 0.18 + side * 0.5
 		_:
+			# Bounce apex at the hand, low point on the floor, and pushed out
+			# ahead of the player so it is not being carried.
 			var bounce := absf(sin(_dribble_phase))
-			var height := lerpf(CourtMetrics.BALL_RADIUS + 0.02, rig.shoulder_height * 0.62,
-				bounce)
+			var height := lerpf(CourtMetrics.BALL_RADIUS + 0.01,
+				rig.shoulder_height * 0.66, bounce)
+			var travel := Vector3(velocity.x, 0.0, velocity.z) * 0.10
 			ball_anchor.global_position = global_position + Vector3.UP * height \
-				+ _facing * 0.32 + side
+				+ _facing * 0.30 + side * 0.85 + travel
 
 
 func take_ball(new_ball: Ball) -> void:

@@ -34,7 +34,7 @@ rewrite a league already in progress.
       "primary": "#204080",
       "secondary": "#f0f0f0",
       "accent": "#101828",
-      "replace_roster": true,
+      "replace_roster": false,
       "players": [
         {
           "fn": "First",
@@ -61,6 +61,9 @@ rewrite a league already in progress.
 | `primary`, `secondary`, `accent` | no | Kit and court colours as hex |
 | `replace_roster` | no | `true` (default) swaps the roster out, `false` appends |
 | `players` | no | The players themselves |
+
+A replaced roster shorter than 12 players is topped up with generated
+players, so a two-man pack still leaves a team that can take the floor.
 
 `primary` is the jersey, `secondary` is the trim, numbers and shoes, and
 `accent` tints the shorts and the court apron.

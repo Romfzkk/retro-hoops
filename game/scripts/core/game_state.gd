@@ -67,7 +67,19 @@ func load_career() -> bool:
 		return false
 	league = parsed["league"]
 	_packs_applied.assign(parsed.get("packs", []))
+	_repair_rosters()
 	return true
+
+
+## Saves written before roster packs were bounds-checked can contain a team
+## with too few players to field a lineup.
+func _repair_rosters() -> void:
+	var repaired := 0
+	for team in league["teams"]:
+		repaired += League.ensure_full_roster(team, int(league["seed"]))
+	if repaired > 0:
+		push_warning("Repaired %d missing roster slots in the save" % repaired)
+		save_career()
 
 
 func delete_career() -> void:
@@ -93,5 +105,7 @@ func exhibition_league() -> Dictionary:
 	if league.is_empty():
 		var scratch := League.new_league(1337)
 		PlayerPacks.apply_enabled(scratch)
+		for team in scratch["teams"]:
+			League.ensure_full_roster(team, 1337)
 		return scratch
 	return league

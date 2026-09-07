@@ -85,6 +85,12 @@ static func apply(lg: Dictionary, pack: Dictionary) -> void:
 			(team["roster"] as Array).append_array(players)
 		(team["roster"] as Array).sort_custom(
 			func(a, b): return int(a["ovr"]) > int(b["ovr"]))
+		# A pack that replaces a squad with two players must not leave that team
+		# unable to field five.
+		var filled := League.ensure_full_roster(team, hash(pack.get("id", "")))
+		if filled > 0:
+			push_warning("Pack %s left %s with too few players; filled %d slots"
+				% [pack.get("id", "?"), team["abbr"], filled])
 
 
 static func _find_team(lg: Dictionary, entry: Dictionary) -> Dictionary:
@@ -230,11 +236,17 @@ static func example_pack_json() -> String:
 			"primary": "#204080",
 			"secondary": "#f0f0f0",
 			"accent": "#101828",
-			"replace_roster": true,
-			"players": [{
-				"fn": "First", "ln": "Last", "num": 7, "pos": "PG",
-				"h": 190, "skin": 3, "hair": 1,
-				"ratings": {"base": 78, "thr": 88, "pas": 90, "spd": 86},
-			}],
+			# Left out on purpose in the shipped example: replacing a squad
+			# with a handful of players is the easy way to break a team, and
+			# appending shows the format just as well.
+			"replace_roster": false,
+			"players": [
+				{"fn": "First", "ln": "Last", "num": 7, "pos": "PG",
+					"h": 190, "skin": 3, "hair": 1,
+					"ratings": {"base": 78, "thr": 88, "pas": 90, "spd": 86}},
+				{"fn": "Second", "ln": "Name", "num": 21, "pos": "C",
+					"h": 211, "skin": 1, "hair": 2,
+					"ratings": {"base": 80, "reb": 92, "blk": 90, "cls": 85}},
+			],
 		}],
 	}, "\t")

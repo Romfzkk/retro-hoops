@@ -96,6 +96,7 @@ func _ready() -> void:
 	FrameCapture.attach(self)
 	FrameCapture.FpsProbe.attach(self)
 	SimProbe.attach(self)
+	ControlProbe.attach(self)
 
 
 func _fill_exhibition_setup() -> void:
@@ -157,7 +158,8 @@ func _starting_lineup(roster: Array, size: int) -> Array:
 		var best_score := -INF
 		for player: Dictionary in pool:
 			# Rating first, minus a penalty for playing out of position.
-			var score := float(player["ovr"]) 				- absf(float(player["pos"]) - float(position)) * 6.0
+			var score := float(player["ovr"]) \
+				- absf(float(player["pos"]) - float(position)) * 6.0
 			if score > best_score:
 				best_score = score
 				best = player

@@ -6,6 +6,7 @@ extends Control
 # stay pixel-consistent at any window size.
 
 const BANNER_HOLD := 1.5
+const RELEASE_HOLD := 0.85
 const BANNER_FADE := 0.45
 const BUG_WIDTH := 620.0
 const BUG_HEIGHT := 76.0
@@ -18,6 +19,10 @@ var match_scene: Node
 
 var _banner_text := ""
 var _banner_time := 0.0
+var _release_time := 0.0
+var _release_charge := 0.0
+var _release_verdict := ""
+var _was_charging := false
 var _banner_loud := false
 var _final: Dictionary = {}
 
@@ -40,6 +45,8 @@ func show_final(result: Dictionary) -> void:
 
 func _process(delta: float) -> void:
 	_banner_time = maxf(0.0, _banner_time - delta)
+	_release_time = maxf(0.0, _release_time - delta)
+	_watch_release()
 	queue_redraw()
 
 
@@ -137,20 +144,56 @@ func _draw_shot_clock(bug: Rect2, centre_x: float, clock: MatchClock,
 		UiTheme.RED if urgent else UiTheme.GOLD)
 
 
+func _human_pawn() -> PlayerPawn:
+	var humans: Array = match_scene.humans
+	if humans.is_empty():
+		return null
+	return humans[0].active
+
+
+# The meter used to vanish on the same frame as the release, so a player never
+# saw where their own shot landed on it and had no way to learn the timing.
+func _watch_release() -> void:
+	var pawn := _human_pawn()
+	var charging := pawn != null and pawn.state == PlayerPawn.State.SHOOT \
+		and not pawn.shot_released_this_attempt and pawn.shot_charge > 0.0
+	if _was_charging and not charging and pawn != null:
+		_release_charge = pawn.shot_charge
+		_release_verdict = _verdict_for(pawn.shot_charge)
+		_release_time = RELEASE_HOLD
+	_was_charging = charging
+
+
+func _verdict_for(charge: float) -> String:
+	var window := PlayerPawn.IDEAL_RELEASE
+	if charge < window.x:
+		return "EARLY"
+	if charge > window.y:
+		return "LATE"
+	var centre := (window.x + window.y) * 0.5
+	var half := (window.y - window.x) * 0.5
+	if absf(charge - centre) < half * 0.45:
+		return "PERFECT"
+	return "GOOD"
+
+
 func _draw_shot_meter(scale: float) -> void:
 	if not bool(Settings.get_value("shot_meter_visible")):
 		return
-	var humans: Array = match_scene.humans
-	if humans.is_empty() or humans[0].active == null:
+	var pawn := _human_pawn()
+	if pawn == null:
 		return
-	var pawn: PlayerPawn = humans[0].active
-	if pawn.state != PlayerPawn.State.SHOOT or pawn.shot_released_this_attempt:
+	var charging := pawn.state == PlayerPawn.State.SHOOT \
+		and not pawn.shot_released_this_attempt and pawn.shot_charge > 0.0
+	if not charging and _release_time <= 0.0:
 		return
+	var charge: float = pawn.shot_charge if charging else _release_charge
+	var alpha := 1.0 if charging else clampf(_release_time / RELEASE_HOLD, 0.0, 1.0)
 
 	var meter := METER_SIZE * scale
 	var rect := Rect2(Vector2(size.x * 0.5 - meter.x * 0.5,
 		size.y - 120.0 * scale), meter)
-	UiTheme.panel(self, rect, UiTheme.INK, 0.88)
+	UiTheme.panel(self, rect, UiTheme.INK, 0.88 * alpha)
 
 	# Green window is the release you are aiming for.
 	var span := PlayerPawn.OVERCHARGE
@@ -160,15 +203,30 @@ func _draw_shot_meter(scale: float) -> void:
 		Vector2(rect.size.x * (PlayerPawn.IDEAL_RELEASE.y
 			- PlayerPawn.IDEAL_RELEASE.x) / span, rect.size.y))
 	var window_fill := UiTheme.GREEN
-	window_fill.a = 0.55
+	window_fill.a = 0.55 * alpha
 	draw_rect(window, window_fill)
 
-	var fill := clampf(pawn.shot_charge / span, 0.0, 1.0)
-	var inside := pawn.shot_charge >= PlayerPawn.IDEAL_RELEASE.x \
-		and pawn.shot_charge <= PlayerPawn.IDEAL_RELEASE.y
-	draw_rect(Rect2(rect.position, Vector2(rect.size.x * fill, rect.size.y)),
-		UiTheme.GREEN if inside else UiTheme.TEXT)
-	draw_rect(rect, UiTheme.LINE, false, UiTheme.HAIRLINE)
+	var fill := clampf(charge / span, 0.0, 1.0)
+	var inside := charge >= PlayerPawn.IDEAL_RELEASE.x \
+		and charge <= PlayerPawn.IDEAL_RELEASE.y
+	var bar := UiTheme.GREEN if inside else UiTheme.TEXT
+	bar.a = alpha
+	draw_rect(Rect2(rect.position, Vector2(rect.size.x * fill, rect.size.y)), bar)
+
+	if not charging:
+		var mark_x := rect.position.x + rect.size.x * fill
+		draw_line(Vector2(mark_x, rect.position.y - 4.0 * scale),
+			Vector2(mark_x, rect.end.y + 4.0 * scale),
+			Color(UiTheme.TEXT, alpha), 2.0 * scale)
+		var word := UiTheme.GREEN if inside else UiTheme.TEXT
+		word.a = alpha
+		UiTheme.label_centred(self, _release_verdict, rect.get_center().x,
+			rect.position.y - UiTheme.M * scale, UiTheme.display_font(),
+			UiTheme.size(UiTheme.BODY, scale), word)
+
+	var edge := UiTheme.LINE
+	edge.a = alpha
+	draw_rect(rect, edge, false, UiTheme.HAIRLINE)
 
 
 func _draw_banner(scale: float) -> void:

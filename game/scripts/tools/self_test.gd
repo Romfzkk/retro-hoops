@@ -14,6 +14,7 @@ func _ready() -> void:
 	_court_geometry()
 	_shot_solver()
 	_roster_packs()
+	_roster_repair()
 	_season_simulation()
 	_sound_bank()
 	_match_clock()
@@ -173,6 +174,58 @@ func _roster_packs() -> void:
 		var player: Dictionary = pack["teams"][0]["players"][0]
 		_check("high ratings clamp to 99", int(player["thr"]) == PlayerPacks.RATING_MAX)
 		_check("low ratings clamp to 25", int(player["spd"]) == PlayerPacks.RATING_MIN)
+
+
+func _roster_repair() -> void:
+	var lg := League.new_league(99)
+	var team: Dictionary = lg["teams"][0]
+	var star: Dictionary = (team["roster"] as Array)[0]
+	team["roster"] = [star]
+
+	var added := League.ensure_full_roster(team, 1234)
+	var roster: Array = team["roster"]
+	_check("a one-man roster is topped up", roster.size() == League.ROSTER_SIZE)
+	_check("filling reports what it added", added == League.ROSTER_SIZE - 1)
+	_check("the existing player is kept", roster.has(star))
+
+	var numbers: Array = []
+	for player in roster:
+		numbers.append(int(player["num"]))
+	_check("filled rosters have no duplicate numbers",
+		_unique(numbers).size() == numbers.size())
+	_check("a full roster is left alone", League.ensure_full_roster(team, 1234) == 0)
+
+	# The bug this guards: a pack replacing a squad with fewer than five players
+	# left that team unable to take the floor, and every match with them crashed.
+	var packed := League.new_league(7)
+	var problems: Array[String] = []
+	var pack := PlayerPacks.validate({
+		"format": PlayerPacks.FORMAT_VERSION,
+		"name": "One man team",
+		"teams": [{
+			"abbr_match": String((packed["teams"] as Array)[0]["abbr"]),
+			"replace_roster": true,
+			"players": [{"fn": "Solo", "ln": "Act", "pos": "PG", "ratings": {}}],
+		}],
+	}, problems)
+	_check("the one-man pack is well formed", problems.is_empty())
+	pack["id"] = "one_man"
+	PlayerPacks.apply(packed, pack)
+	for entry in packed["teams"]:
+		_check("%s can still field a squad" % entry["abbr"],
+			(entry["roster"] as Array).size() == League.ROSTER_SIZE)
+	var names: Array = []
+	for player in (packed["teams"] as Array)[0]["roster"]:
+		names.append(String(player["ln"]))
+	_check("the pack's own player survives the fill", names.has("Act"))
+
+
+func _unique(values: Array) -> Array:
+	var seen: Array = []
+	for value in values:
+		if not seen.has(value):
+			seen.append(value)
+	return seen
 
 
 func _season_simulation() -> void:
