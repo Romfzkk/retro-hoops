@@ -58,6 +58,7 @@ var _tipoff_timer := 0.0
 var _tipoff_jumpers: Array[PlayerPawn] = []
 var _resume_phase: MatchContext.Phase = MatchContext.Phase.LIVE
 var _elapsed := 0.0
+var _pause_layer: CanvasLayer
 var _rng := RandomNumberGenerator.new()
 
 
@@ -471,8 +472,47 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action("pause") or event.is_action("ui_cancel"):
 		if ctx.phase == MatchContext.Phase.OVER:
 			Game.goto("res://scenes/box_score.tscn")
-		else:
-			Game.goto("res://scenes/main_menu.tscn")
+		elif _pause_layer == null:
+			_open_pause_menu()
+
+
+# Esc used to walk straight out of the match with no way back. The tree is
+# paused rather than the scene torn down, so the game is still there behind it.
+func _open_pause_menu() -> void:
+	var menu := MenuScreen.new()
+	menu.title = "PAUSED"
+	menu.subtitle = "%s  %d - %d  %s" % [setup.home["abbr"], box.team_points[0],
+		box.team_points[1], setup.away["abbr"]]
+	menu.footer = "Move  W/S    Select  Enter    Resume  Esc"
+	menu.dim_background = false
+	menu.rows = [
+		{"id": "resume", "label": "RESUME"},
+		{"id": "quit", "label": "QUIT TO MENU"},
+	]
+	menu.chosen.connect(_on_pause_choice)
+	menu.cancelled.connect(_close_pause_menu)
+
+	_pause_layer = CanvasLayer.new()
+	_pause_layer.layer = 10
+	_pause_layer.add_child(menu)
+	# The layer has to keep running while everything else is stopped.
+	_pause_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_pause_layer)
+	get_tree().paused = true
+
+
+func _close_pause_menu() -> void:
+	if _pause_layer == null:
+		return
+	get_tree().paused = false
+	_pause_layer.queue_free()
+	_pause_layer = null
+
+
+func _on_pause_choice(id: String) -> void:
+	_close_pause_menu()
+	if id == "quit":
+		Game.goto("res://scenes/main_menu.tscn")
 
 
 func _on_ball_bounced(_position: Vector3) -> void:
