@@ -777,11 +777,14 @@ func _on_steal_attempt(thief: PlayerPawn, target: PlayerPawn) -> void:
 
 func _on_dunk(pawn: PlayerPawn) -> void:
 	events["dunks"] = int(events["dunks"]) + 1
-	camera.shake(1.0)
+	# A walk-up put-down and a full-speed hammer should not land the same.
+	var power := pawn.dunk_power
+	camera.shake(0.7 + power * 0.9)
 	if not _balance_run:
-		hoops[pawn.basket].flex(1.0)
-	Sound.play("rim", 0.0, 0.86)
-	Sound.play("cheer", -3.0)
+		hoops[pawn.basket].flex(0.75 + power * 0.6)
+	Sound.play("rim", -2.0 + power * 4.0, 0.92 - power * 0.12)
+	Sound.play("cheer", -6.0 + power * 5.0)
+	Sound.react(0.7 + power * 0.3)
 	Sound.react(1.0)
 	hud.announce("SLAM", true)
 

@@ -342,27 +342,39 @@ static func _add_environment(parent: Node3D, arena: Dictionary) -> void:
 		sky.sky_material = sky_material
 		env.sky = sky
 
+	# Ambient is fill, not lighting. Carrying half the exposure from every
+	# direction at once flattens every surface and is most of why the court
+	# read as cartoon: nothing had a dark side.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.58, 0.62, 0.72)
-	env.ambient_light_energy = 0.62 if outdoor else 0.46
+	env.ambient_light_color = Color(0.34, 0.38, 0.48)
+	env.ambient_light_energy = 0.46 if outdoor else 0.20
 
 	env.tonemap_mode = Environment.TONE_MAPPER_AGX
 	env.tonemap_white = 4.0
 	env.tonemap_exposure = 1.05
 
 	env.glow_enabled = true
-	env.glow_intensity = 0.28
-	env.glow_bloom = 0.03
-	env.glow_hdr_threshold = 1.35
+	env.glow_intensity = 0.22
+	env.glow_bloom = 0.02
+	env.glow_hdr_threshold = 1.6
 
+	# Contact shadows do most of the work of sitting a player on the floor
+	# rather than floating above it.
 	env.ssao_enabled = true
-	env.ssao_radius = 0.9
-	env.ssao_intensity = 1.6
-	env.ssao_power = 1.4
+	env.ssao_radius = 1.4
+	env.ssao_intensity = 2.6
+	env.ssao_power = 2.0
+	env.ssao_light_affect = 0.25
 
+	env.ssil_enabled = not OS.has_feature("mobile")
+	env.ssil_radius = 3.0
+	env.ssil_intensity = 0.9
+
+	# Pushing saturation above 1 is the other half of the cartoon look. Let the
+	# kit colours carry it instead, and buy the punch back with contrast.
 	env.adjustment_enabled = true
-	env.adjustment_contrast = 1.04
-	env.adjustment_saturation = 1.06
+	env.adjustment_contrast = 1.12
+	env.adjustment_saturation = 0.97
 
 	# Haze in the air so the rigs throw visible shafts down onto the floor.
 	# Volumetric fog is a Forward+ feature, and it is not cheap enough to ask a

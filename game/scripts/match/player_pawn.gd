@@ -26,6 +26,9 @@ const GATHER_TIME := 0.16
 const STEAL_TIME := 0.42
 const STUMBLE_TIME := 0.55
 const DUNK_RANGE := 3.4
+## How long the dunk owns the player: the rise, the hang and the landing. It
+## used to hand back 0.4s after touchdown, which cut the animation in half.
+const DUNK_HANG := 0.95
 const LAYUP_RANGE := 4.2
 ## Below this you go up with it whether or not you are running.
 const STANDING_LAYUP_RANGE := 2.3
@@ -68,6 +71,7 @@ var _max_speed := 7.0
 var _acceleration := 24.0
 var _jump_height := 0.7
 var _rng := RandomNumberGenerator.new()
+var dunk_power := 0.0
 var _dribble_phase := 0.0
 var _last_bounce := 0
 var _facing := Vector3.FORWARD
@@ -269,7 +273,20 @@ func _defence_inputs() -> void:
 		_begin_steal()
 
 
+## 0 is a routine put-down, 1 is a full-speed hammer. Fixed as the dunk starts
+## so the hang, the slam and the crowd all agree on the same one.
+func _dunk_power() -> float:
+	var approach := clampf(Vector3(velocity.x, 0.0, velocity.z).length()
+		/ maxf(_max_speed, 0.01), 0.0, 1.0)
+	var skill := clampf((float(data["dnk"]) - 55.0) / 44.0, 0.0, 1.0)
+	return clampf(approach * 0.55 + skill * 0.45, 0.0, 1.0)
+
+
 func _begin_shot_attempt() -> void:
+	# Cleared for every finish, not just jump shots: a dunk that inherited a
+	# stale release skipped its own jump.
+	shot_charge = 0.0
+	shot_released_this_attempt = false
 	var to_rim := distance_to_rim()
 	var flat := Vector3(velocity.x, 0.0, velocity.z)
 	var heading := (rim() - global_position)
@@ -278,6 +295,7 @@ func _begin_shot_attempt() -> void:
 		flat.normalized()) > 0.2
 	if to_rim < DUNK_RANGE and can_dunk() and driving \
 			and (intent.sprint or intent.special_pressed):
+		dunk_power = _dunk_power()
 		_enter(State.DUNK)
 		return
 	# Close in and pointed at the rim, going up with it is the shot. Requiring a
@@ -288,8 +306,6 @@ func _begin_shot_attempt() -> void:
 		_enter(State.LAYUP)
 		return
 	_enter(State.SHOOT)
-	shot_charge = 0.0
-	shot_released_this_attempt = false
 
 
 func _tick_shoot(delta: float) -> void:
@@ -467,15 +483,19 @@ func _tick_dunk(delta: float) -> void:
 	if state_time < 0.12:
 		_walk(delta, 0.9)
 	_face_point(target, delta, 18.0)
-	if state_time >= 0.10 and is_on_floor():
+	if state_time >= 0.10 and is_on_floor() and not shot_released_this_attempt:
 		var flat := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
-		var rise := sqrt(2.0 * GRAVITY * jump_height())
+		# A hard approach goes higher, so a fast break finishes above the rim
+		# rather than scraping it.
+		var rise := sqrt(2.0 * GRAVITY * jump_height() * (1.0 + dunk_power * 0.22))
 		velocity = flat.normalized() * minf(flat.length() * 1.9, _max_speed * 1.15)
 		velocity.y = rise
 	var hand_height := global_position.y + standing_reach()
-	if has_ball and hand_height > CourtMetrics.RIM_HEIGHT + 0.05 and velocity.y < 1.2:
+	# Put it down at the top of the jump rather than on the way up, which is
+	# what made the dunk read as letting go early.
+	if has_ball and hand_height > CourtMetrics.RIM_HEIGHT + 0.02 and velocity.y < 0.35:
 		_finish_dunk()
-	if is_on_floor() and state_time > 0.4:
+	if is_on_floor() and state_time > DUNK_HANG and shot_released_this_attempt:
 		_enter(State.LOCOMOTION)
 
 
@@ -490,6 +510,7 @@ func _finish_dunk() -> void:
 		Vector3(6.0, 0.0, 0.0), Ball.State.SHOT)
 	has_ball = false
 	pickup_cooldown = 0.5
+	shot_released_this_attempt = true
 	dunked.emit(self)
 	shot_released.emit(self, 2, 0.99)
 
@@ -740,7 +761,9 @@ func _action_progress() -> float:
 			return clampf(shot_charge / OVERCHARGE, 0.0, 1.0)
 		State.PASS:
 			return clampf(state_time / 0.32, 0.0, 1.0)
-		State.DUNK, State.LAYUP:
+		State.DUNK:
+			return clampf(state_time / 0.82, 0.0, 1.0)
+		State.LAYUP:
 			return clampf(state_time / 0.55, 0.0, 1.0)
 		State.JUMP:
 			return clampf(state_time / 0.35, 0.0, 1.0)
