@@ -45,11 +45,13 @@ func _report() -> void:
 	for team_index in 2:
 		var team: Dictionary = setup.home if team_index == 0 else setup.away
 		var totals := _totals(box, team_index)
-		print("%s  %d pts | FG %d/%d (%s) | 3P %d/%d | REB %d | AST %d | TO %d" % [
+		print("%s  %d pts | FG %d/%d (%s) | 3P %d/%d | REB %d | AST %d | TO %d | PF %d" % [
 			String(team["abbr"]), box.team_points[team_index],
 			totals["fgm"], totals["fga"], _percent(totals["fgm"], totals["fga"]),
 			totals["tpm"], totals["tpa"], totals["reb"], totals["ast"], totals["to"],
+			totals["pf"],
 		])
+	print("team fouls %d / %d" % [match_scene.team_fouls[0], match_scene.team_fouls[1]])
 	print("out of bounds %d | shot clock %d | possessions %d | dunks %d" % [
 		events["out_of_bounds"], events["shot_clock"], events["possessions"],
 		events["dunks"]])

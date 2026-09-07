@@ -25,6 +25,7 @@ the playoffs. It is not finished — see [Limitations](#limitations) and
 - [x] Dunks and layups gated on actual reach: standing reach plus vertical against the rim
 - [x] Dribbling, passing with lane interception, steals, blocks, rebounds
 - [x] Shot clock, period clock, out of bounds, shot-clock violations, overtime
+- [x] Fouls, free throws, team fouls and the bonus
 - [x] Man-to-man defence with help on drives, off-ball spacing and cuts
 - [x] Stamina that decays with sprinting and drags on shooting
 
@@ -153,8 +154,8 @@ turnovers between the two teams.
 
 Things that are genuinely not there or not good yet:
 
-- **No fouls or free throws.** Contact is ignored; there is no bonus and no
-  foul trouble.
+- **No foul trouble.** Fouls and the bonus are called, but nobody fouls out
+  and there is no offensive foul or charge.
 - **No traveling, backcourt or three-second violations.** Only the shot clock
   and out of bounds are called.
 - **3-on-3 uses full-court rules.** It is five-a-side with fewer players, not
@@ -175,7 +176,7 @@ Things that are genuinely not there or not good yet:
 **Done** — everything in the feature list above.
 
 **Next**
-- Fouls, free throws and the bonus
+- Fouling out, offensive fouls and charges
 - Menu music, and commentary call-outs
 - Substitutions and a rotation the AI manages
 - Half-court rules for 3-on-3
