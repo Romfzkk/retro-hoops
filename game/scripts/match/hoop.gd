@@ -92,16 +92,28 @@ func _add_backboard(centre: Vector3, tint: Color) -> void:
 	glass.material_override = Materials.glass()
 	body.add_child(glass)
 
-	var frame := MeshInstance3D.new()
-	var frame_mesh := BoxMesh.new()
-	frame_mesh.size = box.size + Vector3(0.005, 0.07, 0.07)
-	frame.mesh = frame_mesh
-	frame.material_override = Materials.flat(tint, 0.5, 0.3)
-	frame.position = Vector3(0.0, 0.0, 0.0)
-	frame.scale = Vector3(0.98, 1.0, 1.0)
-	body.add_child(frame)
+	# Perimeter padding only. A full box behind the glass turns the whole
+	# backboard into a coloured panel.
+	var pad := Materials.flat(tint, 0.6, 0.1)
+	var half_h := CourtMetrics.BACKBOARD_HEIGHT * 0.5
+	var half_w := CourtMetrics.BACKBOARD_WIDTH * 0.5
+	var bars := [
+		[Vector3(0.0, half_h, 0.0), Vector3(0.08, 0.07, CourtMetrics.BACKBOARD_WIDTH + 0.07)],
+		[Vector3(0.0, -half_h, 0.0), Vector3(0.08, 0.07, CourtMetrics.BACKBOARD_WIDTH + 0.07)],
+		[Vector3(0.0, 0.0, half_w), Vector3(0.08, CourtMetrics.BACKBOARD_HEIGHT, 0.07)],
+		[Vector3(0.0, 0.0, -half_w), Vector3(0.08, CourtMetrics.BACKBOARD_HEIGHT, 0.07)],
+	]
+	for bar in bars:
+		var mesh := MeshInstance3D.new()
+		var bar_box := BoxMesh.new()
+		bar_box.size = bar[1]
+		mesh.mesh = bar_box
+		mesh.material_override = pad
+		mesh.position = bar[0]
+		body.add_child(mesh)
 
 	_add_shooter_square(body)
+	CollisionLayers.apply_to_world(body)
 	add_child(body)
 
 
@@ -159,6 +171,7 @@ func _add_rim() -> void:
 	body.add_child(ring)
 
 	_add_rim_bracket(body)
+	CollisionLayers.apply_to_world(body)
 	add_child(body)
 
 
@@ -232,6 +245,7 @@ func _add_stanchion(baseline_x: float, board_centre: Vector3) -> void:
 	base_mesh.material_override = padded
 	base.add_child(base_mesh)
 	base.position = Vector3(baseline_x - facing * 1.0, base_box.size.y * 0.5, 0.0)
+	CollisionLayers.apply_to_world(base)
 	add_child(base)
 
 

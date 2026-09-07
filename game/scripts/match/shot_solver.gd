@@ -6,9 +6,9 @@ extends RefCounted
 # trajectory that can still rattle in.
 
 const GRAVITY := 9.806
-const MIN_FLIGHT := 0.62
-const MAX_FLIGHT := 1.55
-const MAX_AIM_ERROR := 0.55
+const MIN_FLIGHT := 0.78
+const MAX_FLIGHT := 1.95
+const MAX_AIM_ERROR := 0.42
 
 # How far a defender's hand has to be from the ball before the shot is clean.
 const CONTEST_RADIUS := 1.9
@@ -16,17 +16,24 @@ const CONTEST_HEIGHT := 0.75
 
 
 static func flight_time(distance: float, arc_bias: float) -> float:
-	# Longer shots get a flatter, faster arc; floaters near the rim hang.
-	var base := 0.70 + distance * 0.052
-	return clampf(base * lerpf(0.88, 1.22, clampf(arc_bias, 0.0, 1.0)),
+	# Flight time sets the arc. These numbers put a mid-range jumper on roughly
+	# a 45 degree entry, which is what actually drops through the ring instead
+	# of clanging off the front of it.
+	var base := 0.86 + distance * 0.060
+	return clampf(base * lerpf(0.96, 1.28, clampf(arc_bias, 0.0, 1.0)),
 		MIN_FLIGHT, MAX_FLIGHT)
 
 
 static func launch_velocity(from: Vector3, to: Vector3, time: float) -> Vector3:
+	# The engine integrates with semi-implicit Euler, which lands a projectile
+	# 0.5 * g * dt * t below the analytic parabola - about 10cm over a 1.3s
+	# flight, enough to clip the front of the rim on a shot aimed dead centre.
+	# Adding half a step of gravity to the launch cancels it exactly.
+	var step := 1.0 / float(Engine.physics_ticks_per_second)
 	var delta := to - from
 	return Vector3(
 		delta.x / time,
-		delta.y / time + 0.5 * GRAVITY * time,
+		delta.y / time + 0.5 * GRAVITY * (time + step),
 		delta.z / time)
 
 
@@ -45,12 +52,15 @@ static func accuracy(player: Dictionary, distance: float, behind_arc: bool,
 
 	var skill := clampf((rating - 30.0) / 62.0, 0.0, 1.0)
 	var range_penalty := clampf((distance - shooting_range(player)) * 0.055, 0.0, 0.45)
-	var contest_penalty := clampf(contest, 0.0, 1.0) * lerpf(0.42, 0.22, skill)
-	var movement_penalty := clampf(movement, 0.0, 1.0) * 0.20
-	var fatigue_penalty := clampf(fatigue, 0.0, 1.0) * 0.18
+	var contest_penalty := clampf(contest, 0.0, 1.0) * lerpf(0.34, 0.18, skill)
+	var movement_penalty := clampf(movement, 0.0, 1.0) * 0.14
+	var fatigue_penalty := clampf(fatigue, 0.0, 1.0) * 0.16
 	var release := clampf(release_quality, 0.0, 1.0)
 
-	var value := 0.30 + skill * 0.42 + release * 0.30
+	# Tuned against tools/shot_lab: an average shooter taking an average look
+	# lands near 0.50, which the accuracy-to-make curve turns into roughly 47%
+	# from the field and 40% from three.
+	var value := 0.10 + skill * 0.40 + release * 0.26
 	value -= range_penalty + contest_penalty + movement_penalty + fatigue_penalty
 	# The difficulty dial moves the AI's edge, not the player's ceiling.
 	value -= float(difficulty) * 0.012

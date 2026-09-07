@@ -28,19 +28,21 @@ func tick(delta: float) -> void:
 	if not running:
 		return
 	remaining = maxf(0.0, remaining - delta)
+	# The period horn beats the shot clock. Checking them the other way round
+	# leaves a dead period handing out 0.1s shot clocks forever.
+	if remaining <= 0.0:
+		running = false
+		quarter_expired.emit(quarter)
+		return
 	shot_clock = maxf(0.0, shot_clock - delta)
 	if shot_clock <= 0.0:
 		running = false
 		shot_clock_expired.emit()
-		return
-	if remaining <= 0.0:
-		running = false
-		quarter_expired.emit(quarter)
 
 
 func reset_shot_clock(seconds: float = SHOT_CLOCK) -> void:
 	# Never hand back more time than is left in the period.
-	shot_clock = minf(seconds, maxf(remaining, 0.1))
+	shot_clock = seconds if remaining <= 0.0 else minf(seconds, remaining)
 
 
 ## The clock only tops up to 14 when the offence keeps the ball on the glass.

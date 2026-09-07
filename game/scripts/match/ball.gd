@@ -12,6 +12,8 @@ signal hit_backboard()
 enum State { LOOSE, HELD, SHOT, PASS, DEAD }
 
 const BOUNCE := 0.78
+## After this long an uncaught pass is anybody's ball.
+const PASS_LIFETIME := 1.5
 const FRICTION := 0.62
 
 var state: State = State.LOOSE
@@ -23,8 +25,13 @@ var shot_points: int = 2
 var shot_from := Vector3.ZERO
 var pass_target: int = -1
 var last_touched_by: int = -1
+## A shot cannot be rebounded until it has hit iron or dropped below the ring.
+## Without this, defenders pluck live shots out of the air mid-flight.
+var rebound_ready := true
 
 var _floor_cooldown := 0.0
+var _pass_age := 0.0
+var _reached_rim_height := false
 
 
 static func create() -> Ball:
@@ -34,13 +41,19 @@ static func create() -> Ball:
 	ball.continuous_cd = true
 	ball.contact_monitor = true
 	ball.max_contacts_reported = 4
-	ball.linear_damp = 0.06
+	# REPLACE, not the default COMBINE: the world's default area damping is
+	# still added under COMBINE, and even 0.1 bleeds enough speed over a 1.3s
+	# flight to drop every shot a metre short of the aim point.
+	ball.linear_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
+	ball.linear_damp = 0.0
+	ball.angular_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
 	ball.angular_damp = 0.35
 
 	var physics := PhysicsMaterial.new()
 	physics.bounce = BOUNCE
 	physics.friction = FRICTION
 	ball.physics_material_override = physics
+	CollisionLayers.apply_to_ball(ball)
 
 	var shape := CollisionShape3D.new()
 	var sphere := SphereShape3D.new()
@@ -73,6 +86,24 @@ func _physics_process(delta: float) -> void:
 		global_position = hold_anchor.global_position
 		linear_velocity = Vector3.ZERO
 		angular_velocity = Vector3.ZERO
+	elif state == State.SHOT and not rebound_ready:
+		_track_shot_flight()
+
+
+# A shot only becomes reboundable once it has actually been up at the rim.
+# Arming purely on "below rim height" is true the instant it leaves the hand,
+# which lets the nearest player catch every attempt a frame after release.
+func _track_shot_flight() -> void:
+	var height := global_position.y
+	if height > CourtMetrics.RIM_HEIGHT + 0.05:
+		_reached_rim_height = true
+		return
+	if _reached_rim_height and height < CourtMetrics.RIM_HEIGHT - 0.35:
+		rebound_ready = true
+		return
+	# An air ball that never got up there is live again once it is falling.
+	if linear_velocity.y < 0.0 and height < CourtMetrics.RIM_HEIGHT - 1.2:
+		rebound_ready = true
 
 
 func hold(new_holder: Node3D, anchor: Node3D, player_index: int) -> void:
@@ -85,6 +116,17 @@ func hold(new_holder: Node3D, anchor: Node3D, player_index: int) -> void:
 	pass_target = -1
 
 
+## Teleport and throw in one step. Order matters: a frozen body has to be
+## released before it is moved, or the physics server keeps the stale transform
+## for the first step and the shot leaves from the wrong place.
+func launch(from: Vector3, velocity: Vector3, spin: Vector3, new_state: State) -> void:
+	holder = null
+	hold_anchor = null
+	freeze = false
+	global_position = from
+	release(velocity, spin, new_state)
+
+
 func release(velocity: Vector3, spin: Vector3, new_state: State) -> void:
 	holder = null
 	hold_anchor = null
@@ -92,6 +134,9 @@ func release(velocity: Vector3, spin: Vector3, new_state: State) -> void:
 	freeze = false
 	linear_velocity = velocity
 	angular_velocity = spin
+	rebound_ready = new_state != State.SHOT
+	_reached_rim_height = false
+	_pass_age = 0.0
 
 
 func go_loose() -> void:
@@ -99,6 +144,14 @@ func go_loose() -> void:
 	hold_anchor = null
 	state = State.LOOSE
 	freeze = false
+
+
+## Parked between whistles. Held balls stay frozen either way, so the match
+## never has to reason about freeze itself.
+func set_paused(paused: bool) -> void:
+	if state == State.HELD:
+		return
+	freeze = paused
 
 
 func is_live() -> bool:
@@ -111,11 +164,16 @@ func speed() -> float:
 
 func _on_body_entered(body: Node) -> void:
 	if body.is_in_group("rim"):
+		rebound_ready = true
 		hit_rim.emit()
 	elif body.is_in_group("backboard"):
+		rebound_ready = true
 		hit_backboard.emit()
 	elif _floor_cooldown <= 0.0 and global_position.y < CourtMetrics.BALL_RADIUS * 3.0:
 		_floor_cooldown = 0.12
+		rebound_ready = true
+		if state == State.PASS:
+			state = State.LOOSE
 		touched_floor.emit(global_position)
 
 

@@ -12,7 +12,7 @@ func _ready() -> void:
 	var team: Dictionary = lg["teams"][0]
 	var arena: Dictionary = Teams.ARENAS[0]
 
-	ArenaBuilder.build(self, team, arena, 7)
+	ArenaBuilder.build(self, team, lg["teams"][1], arena, 7)
 	add_child(Hoop.create(0, Color(team["primary"])))
 	add_child(Hoop.create(1, Color(lg["teams"][1]["primary"])))
 

@@ -4,8 +4,8 @@ extends Camera3D
 # Camera rig for the match. Every mode resolves to a wanted eye/target pair and
 # the rig damps toward it, so switching modes never snaps.
 
-const SIDELINE_Z := 17.5
-const EYE_HEIGHT := 8.6
+const SIDELINE_Z := 17.0
+const EYE_HEIGHT := 7.6
 
 var mode: int = Settings.CameraMode.BROADCAST
 var target: Node3D
@@ -71,11 +71,11 @@ func _process(delta: float) -> void:
 func _broadcast() -> Array:
 	# Dolly with the play but stay short of the ball so the camera reads as a
 	# camera operator panning, not a chase cam.
-	var x := clampf(focus_point.x * 0.62, -10.0, 10.0)
+	var x := clampf(focus_point.x * 0.52, -8.5, 8.5)
 	var depth := SIDELINE_Z - clampf(absf(focus_point.z) * 0.18, 0.0, 1.6)
-	_fov = 47.0 + clampf(absf(focus_point.x) * 0.22, 0.0, 6.0)
+	_fov = 50.0 + clampf(absf(focus_point.x) * 0.24, 0.0, 7.0)
 	return [Vector3(x, EYE_HEIGHT, depth),
-		Vector3(focus_point.x * 0.92, 1.35, focus_point.z * 0.42)]
+		Vector3(focus_point.x * 0.94, 1.55, focus_point.z * 0.45)]
 
 
 func _behind() -> Array:

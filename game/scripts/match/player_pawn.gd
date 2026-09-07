@@ -24,6 +24,8 @@ const DUNK_RANGE := 3.4
 const LAYUP_RANGE := 3.1
 const BODY_RADIUS := 0.38
 const PICKUP_RADIUS := 0.95
+const INTERCEPT_REACH := 0.85
+const INTERCEPT_BASE := 0.07
 
 var data: Dictionary
 var team_index := 0
@@ -59,17 +61,17 @@ var _pending_pass: PlayerPawn
 
 
 static func create(player: Dictionary, team: Dictionary, team_idx: int,
-		attacking_basket: int, host: Node) -> PlayerPawn:
+		attacking_basket: int, host: Node, with_meshes: bool = true) -> PlayerPawn:
 	var pawn := PlayerPawn.new()
 	pawn.data = player
 	pawn.team_index = team_idx
 	pawn.basket = attacking_basket
 	pawn.name = "P%d_%d" % [team_idx, int(player["id"])]
-	pawn._setup(team, host)
+	pawn._setup(team, host, with_meshes)
 	return pawn
 
 
-func _setup(team: Dictionary, host: Node) -> void:
+func _setup(team: Dictionary, host: Node, with_meshes: bool) -> void:
 	_rng.seed = int(data["id"]) * 7919 + 13
 	_max_speed = 5.1 + float(data["spd"]) / 99.0 * 3.0
 	_acceleration = 13.0 + float(data["acc"]) / 99.0 * 17.0
@@ -82,8 +84,9 @@ func _setup(team: Dictionary, host: Node) -> void:
 	shape.shape = capsule
 	shape.position = Vector3(0.0, capsule.height * 0.5, 0.0)
 	add_child(shape)
+	CollisionLayers.apply_to_player(self)
 
-	rig = PlayerRig.create(data, team, host)
+	rig = PlayerRig.create(data, team, host, with_meshes)
 	add_child(rig)
 	animator = PlayerAnimator.new(rig)
 	animator.top_speed = _max_speed
@@ -229,11 +232,10 @@ func _release_shot(forced: bool) -> void:
 	var time := ShotSolver.flight_time(from.distance_to(target), arc_bias)
 	var launch := ShotSolver.launch_velocity(from, target, time)
 
-	ball.global_position = from
 	ball.shot_by = get_instance_id()
 	ball.shot_points = 3 if behind_arc else 2
 	ball.shot_from = global_position
-	ball.release(launch, -_facing.cross(Vector3.UP) * 12.0, Ball.State.SHOT)
+	ball.launch(from, launch, -_facing.cross(Vector3.UP) * 12.0, Ball.State.SHOT)
 	has_ball = false
 	pickup_cooldown = 0.35
 	shot_released.emit(self, ball.shot_points, accuracy)
@@ -243,7 +245,7 @@ func _release_quality(forced: bool) -> float:
 	var style := int(Settings.get_value("shot_style"))
 	if style == Settings.ShotStyle.AUTO or not is_user_controlled:
 		# AI and assisted shooting lean on the rating instead of the meter.
-		return 0.52 + float(data["mid"] if not is_user_controlled else 70) / 99.0 * 0.30
+		return 0.34 + float(data["mid"] if not is_user_controlled else 70) / 99.0 * 0.34
 	if forced:
 		return 0.10
 	var centre := (IDEAL_RELEASE.x + IDEAL_RELEASE.y) * 0.5
@@ -331,13 +333,39 @@ func _send_pass(target: PlayerPawn) -> void:
 	to += Vector3(_rng.randfn(0.0, wobble), _rng.randfn(0.0, wobble * 0.4),
 		_rng.randfn(0.0, wobble))
 
-	ball.global_position = from
-	ball.pass_target = target.get_instance_id()
-	ball.release(ShotSolver.launch_velocity(from, to, zip), Vector3.ZERO, Ball.State.PASS)
+	# Whether the pass is picked off is decided here, from who is actually
+	# sitting in the lane. Letting any nearby defender grab it in flight turns
+	# every pass into a coin toss.
+	var thief := _lane_thief(from, to)
+	ball.pass_target = thief.get_instance_id() if thief != null \
+		else target.get_instance_id()
+	ball.launch(from, ShotSolver.launch_velocity(from, to, zip), Vector3.ZERO,
+		Ball.State.PASS)
 	has_ball = false
 	pickup_cooldown = 0.2
 	target.pickup_cooldown = 0.0
 	ball_passed.emit(self, target)
+
+
+# A defender close to the line of the pass gets one roll to jump it, weighted
+# by their steal rating against the passer's vision.
+func _lane_thief(from: Vector3, to: Vector3) -> PlayerPawn:
+	var lane := to - from
+	var length := lane.length()
+	if length < 0.5:
+		return null
+	var direction := lane / length
+	for defender in opponents:
+		var offset := defender.global_position + Vector3.UP * 1.0 - from
+		var along := offset.dot(direction)
+		if along < 0.6 or along > length - 0.35:
+			continue
+		if (offset - direction * along).length() > INTERCEPT_REACH:
+			continue
+		var edge := (float(defender.data["stl"]) - float(data["pas"])) / 260.0
+		if _rng.randf() < clampf(INTERCEPT_BASE + edge, 0.02, 0.30):
+			return defender
+	return null
 
 
 func _tick_dunk(delta: float) -> void:
@@ -361,11 +389,10 @@ func _finish_dunk() -> void:
 	if ball == null or ball.holder != self:
 		return
 	var target := rim()
-	ball.global_position = target + Vector3.UP * 0.10
 	ball.shot_by = get_instance_id()
 	ball.shot_points = 2
 	ball.shot_from = global_position
-	ball.release(Vector3(0.0, -4.4, 0.0) + velocity * 0.15,
+	ball.launch(target + Vector3.UP * 0.10, Vector3(0.0, -4.4, 0.0) + velocity * 0.15,
 		Vector3(6.0, 0.0, 0.0), Ball.State.SHOT)
 	has_ball = false
 	pickup_cooldown = 0.5
@@ -399,11 +426,10 @@ func _release_layup() -> void:
 	var board_point := rim() + Vector3.UP * 0.28
 	var target := ShotSolver.aim_point(board_point, from, accuracy, _rng)
 	var time := ShotSolver.flight_time(from.distance_to(target), 0.85)
-	ball.global_position = from
 	ball.shot_by = get_instance_id()
 	ball.shot_points = 2
 	ball.shot_from = global_position
-	ball.release(ShotSolver.launch_velocity(from, target, time),
+	ball.launch(from, ShotSolver.launch_velocity(from, target, time),
 		Vector3(0.0, 0.0, 6.0), Ball.State.SHOT)
 	has_ball = false
 	pickup_cooldown = 0.4

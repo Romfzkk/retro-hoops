@@ -7,8 +7,13 @@ extends RefCounted
 
 const DECISION_INTERVAL := 0.22
 const OPEN_CONTEST := 0.34
-const DRIVE_LANE_WIDTH := 1.05
+const DRIVE_LANE_WIDTH := 1.55
 const HELP_DISTANCE := 4.2
+const CUT_DURATION := 1.6
+## Seconds of shot clock to burn before the offence starts hunting a shot.
+const PATIENCE := 4.0
+const SHOT_APPETITE := 0.40
+const PASS_APPETITE := 0.30
 
 # Half-court spots as (distance from baseline, offset from centre), indexed by
 # lineup slot. The lineup is built in position order, so slot 0 is the point.
@@ -33,7 +38,7 @@ var difficulty := 1
 
 var _decision_time := 0.0
 var _assignments: Dictionary = {}
-var _cut_timer: Dictionary = {}
+var _cuts: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
 
 
@@ -95,8 +100,10 @@ func _drive_decision(pawn: PlayerPawn, ctx: MatchContext, refresh: bool) -> void
 		pawn.rig.shoulder_height, ctx.opponents_of(team_index))
 	var range_limit := ShotSolver.shooting_range(pawn.data)
 	var desperate := ctx.shot_clock < 4.0
+	var lane_is_open := _lane_is_open(pawn, ctx)
 
 	if refresh:
+		var lane_open := lane_is_open
 		var shoot_score := 0.0
 		if contest < OPEN_CONTEST:
 			shoot_score += 0.45
@@ -104,27 +111,41 @@ func _drive_decision(pawn: PlayerPawn, ctx: MatchContext, refresh: bool) -> void
 			shoot_score += 0.35
 		else:
 			shoot_score -= 0.45
-		if distance < 2.6:
-			shoot_score += 0.45
+		# Only a genuinely open lane is worth attacking; otherwise take the
+		# jumper rather than charging into help every single possession.
+		if distance < 2.8 and lane_open:
+			shoot_score += 0.40
+		elif distance < 2.8:
+			shoot_score -= 0.25
 		if desperate:
 			shoot_score += 0.9
 		shoot_score += float(difficulty) * 0.04
-		if _rng.randf() < shoot_score * 0.55:
+		# Hold the ball for a beat before hunting a shot. Without this the AI
+		# fires on the catch and a 20 minute game runs 350 possessions.
+		var settled := ctx.shot_clock < MatchClock.SHOT_CLOCK - PATIENCE
+		var wide_open := distance < 2.4 and contest < 0.2 and lane_open
+		if (settled or wide_open) and _rng.randf() < shoot_score * SHOT_APPETITE:
 			pawn.intent.shoot_pressed = true
 			pawn.intent.shoot_held = true
-			pawn.intent.sprint = distance < PlayerPawn.DUNK_RANGE
+			# Finishing at the rim needs the drive flag, otherwise the pawn
+			# settles for a jumper from under the basket.
+			var at_rim := distance < PlayerPawn.DUNK_RANGE and lane_open
+			pawn.intent.sprint = at_rim
+			pawn.intent.special_pressed = at_rim and pawn.can_dunk() 				and contest < OPEN_CONTEST
+			if at_rim:
+				_steer(pawn, rim, 1.0, true)
 			return
 
 		var receiver := _best_pass(pawn, ctx)
-		if receiver != null and _rng.randf() < 0.42:
+		if receiver != null and _rng.randf() < PASS_APPETITE:
 			pawn.intent.pass_pressed = true
 			pawn.intent.pass_target = receiver.lineup_slot
 			var offset := receiver.global_position - pawn.global_position
 			pawn.intent.aim = Vector2(offset.x, offset.z).normalized()
 			return
 
-	if _lane_is_open(pawn, ctx) or distance > range_limit + 2.0:
-		_steer(pawn, rim, 1.0, distance > 4.0)
+	if lane_is_open or distance > range_limit + 2.0:
+		_steer(pawn, rim, 1.0, distance > 2.0)
 	else:
 		# Probe sideways to make the defender commit.
 		var across := (rim - pawn.global_position).cross(Vector3.UP).normalized()
@@ -134,16 +155,27 @@ func _drive_decision(pawn: PlayerPawn, ctx: MatchContext, refresh: bool) -> void
 
 func _space(pawn: PlayerPawn, ctx: MatchContext, delta: float) -> void:
 	var key := pawn.get_instance_id()
-	_cut_timer[key] = float(_cut_timer.get(key, _rng.randf_range(3.0, 8.0))) - delta
-	var spot := _spot_for(pawn, ctx)
-	if float(_cut_timer[key]) <= 0.0:
-		# Cut to the rim, then reset the timer for the next one.
+	var cut: Dictionary = _cuts.get(key, {"wait": _rng.randf_range(3.0, 8.0), "for": 0.0})
+	_cuts[key] = cut
+
+	if float(cut["for"]) > 0.0:
+		cut["for"] = float(cut["for"]) - delta
 		var rim := CourtMetrics.rim_position(basket)
-		_steer(pawn, rim, 0.95, true)
-		if pawn.global_position.distance_to(rim) < 2.0:
-			_cut_timer[key] = _rng.randf_range(4.0, 9.0)
+		# A cut is time-boxed. Ending it only on arrival means a cutter whose
+		# lane is blocked keeps driving forever, and eventually all five end up
+		# stacked under the basket.
+		if float(cut["for"]) <= 0.0 or pawn.global_position.distance_to(rim) < 1.8:
+			cut["for"] = 0.0
+			cut["wait"] = _rng.randf_range(4.5, 9.5)
+		else:
+			_steer(pawn, rim, 0.95, true)
+			return
+
+	cut["wait"] = float(cut["wait"]) - delta
+	if float(cut["wait"]) <= 0.0:
+		cut["for"] = CUT_DURATION
 		return
-	_steer(pawn, spot, 0.62)
+	_steer(pawn, _spot_for(pawn, ctx), 0.62)
 
 
 func _defend(pawn: PlayerPawn, ctx: MatchContext) -> void:
@@ -170,7 +202,7 @@ func _defend(pawn: PlayerPawn, ctx: MatchContext) -> void:
 		var separation := pawn.global_position.distance_to(man.global_position)
 		if man.state == PlayerPawn.State.SHOOT and separation < 2.1:
 			pawn.intent.shoot_pressed = true
-		elif separation < 1.4 and _rng.randf() < 0.012 + float(difficulty) * 0.004:
+		elif separation < 1.4 and _rng.randf() < 0.006 + float(difficulty) * 0.002:
 			pawn.intent.pass_pressed = true
 
 

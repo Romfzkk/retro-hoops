@@ -41,10 +41,11 @@ static func glass() -> StandardMaterial3D:
 static func floor_material(texture: Texture2D) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = texture
-	m.roughness = 0.28
+	m.roughness = 0.44
 	m.metallic = 0.0
-	# The polished boards should catch the arena lights without turning mirror.
-	m.metallic_specular = 0.65
+	# Polished boards should catch the rigs without turning into a mirror; any
+	# lower and the spot lights burn a white hole in the floor.
+	m.metallic_specular = 0.38
 	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	return m
 

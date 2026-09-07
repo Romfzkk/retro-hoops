@@ -13,6 +13,12 @@ var last_box_score: Dictionary = {}
 var _packs_applied: Array[String] = []
 
 
+func goto(scene_path: String) -> void:
+	var err := get_tree().change_scene_to_file(scene_path)
+	if err != OK:
+		push_error("Cannot open %s: %s" % [scene_path, error_string(err)])
+
+
 func has_career() -> bool:
 	return FileAccess.file_exists(SAVE_PATH)
 

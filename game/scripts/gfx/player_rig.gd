@@ -28,53 +28,116 @@ var standing_reach := 2.6
 var pose: Dictionary = {}
 var _target_pose: Dictionary = {}
 var _detail := 1
+var _visible_body := true
 
 
-static func create(player: Dictionary, team: Dictionary, host: Node) -> PlayerRig:
+## `with_meshes` off builds the joint hierarchy and the body metrics but no
+## geometry. Balance runs spawn ten players and never draw them; skipping the
+## ~400 mesh instances each is what makes a headless match faster than a
+## watched one.
+static func create(player: Dictionary, team: Dictionary, host: Node,
+		with_meshes: bool = true) -> PlayerRig:
 	var rig := PlayerRig.new()
 	rig.name = "Rig"
 	rig.height = float(player["h"]) * 0.01
 	rig._detail = 0 if OS.has_feature("mobile") else 1
+	rig._visible_body = with_meshes
 	rig._build(player, team, host)
 	return rig
 
 
-func _build(player: Dictionary, team: Dictionary, host: Node) -> void:
+# Proportions in metres, derived once and shared by the skeleton and the
+# geometry. `bulk` is the only knob for body type: heavier players carry more
+# through the trunk and thighs.
+func _proportions(player: Dictionary) -> Dictionary:
 	var h := height
-	# Heavier players carry more through the trunk and thighs. One number keeps
-	# the variation controlled instead of hand-tuning every body.
 	var bulk := 0.90 + float(player["str"]) / 99.0 * 0.26
 	var lean := 1.06 - (float(player["str"]) / 99.0) * 0.12
-
 	var ankle_y := 0.052 * h
 	var shin := 0.240 * h
 	var thigh := 0.238 * h
-	var hip_y := ankle_y + shin + thigh
-	var torso := 0.290 * h
-	var neck := 0.046 * h
-	var head_radius := 0.076 * h
-	var shoulder_half := 0.120 * h * lean
-	var hip_half := 0.070 * h
-	var upper_arm := 0.180 * h
-	var forearm := 0.146 * h
+	return {
+		"h": h,
+		"bulk": bulk,
+		"ankle_y": ankle_y,
+		"shin": shin,
+		"thigh": thigh,
+		"hip_y": ankle_y + shin + thigh,
+		"torso": 0.290 * h,
+		"neck": 0.046 * h,
+		"head_radius": 0.076 * h,
+		"shoulder_half": 0.120 * h * lean,
+		"hip_half": 0.070 * h,
+		"upper_arm": 0.180 * h,
+		"forearm": 0.146 * h,
+	}
 
-	shoulder_height = hip_y + torso
-	standing_reach = shoulder_height + upper_arm + forearm + 0.118 * h
 
+func _build(player: Dictionary, team: Dictionary, host: Node) -> void:
+	var body := _proportions(player)
+	shoulder_height = body["hip_y"] + body["torso"]
+	standing_reach = shoulder_height + body["upper_arm"] + body["forearm"] \
+		+ 0.118 * body["h"]
+
+	_build_skeleton(body)
+	if _visible_body:
+		_build_geometry(player, team, host, body)
+
+	for key in JOINTS:
+		pose[key] = Vector3.ZERO
+		_target_pose[key] = Vector3.ZERO
+
+
+# Joints only. A balance run needs the hierarchy and the reach numbers but
+# never draws anything, so the geometry pass is skipped entirely.
+func _build_skeleton(body: Dictionary) -> void:
+	var torso: float = body["torso"]
+	var hips := _joint("hips", self, Vector3(0.0, body["hip_y"], 0.0))
+	var spine := _joint("spine", hips, Vector3.ZERO)
+	var chest := _joint("chest", spine, Vector3(0.0, torso * 0.62, 0.0))
+	head_node = _joint("head", chest, Vector3(0.0, torso * 0.38, 0.0))
+
+	for side in [-1.0, 1.0]:
+		var tag := "l" if side > 0.0 else "r"
+		var shoulder := _joint("shoulder_%s" % tag, chest,
+			Vector3(body["shoulder_half"] * 0.88 * side, torso * 0.38, 0.0))
+		var elbow := _joint("elbow_%s" % tag, shoulder,
+			Vector3(0.0, -body["upper_arm"], 0.0))
+		var hand := Node3D.new()
+		hand.name = "hand_%s" % tag
+		hand.position = Vector3(0.0, -body["forearm"], 0.0)
+		elbow.add_child(hand)
+		if side > 0.0:
+			hand_l = hand
+		else:
+			hand_r = hand
+
+		var hip_joint := _joint("hip_%s" % tag, hips,
+			Vector3(body["hip_half"] * side, 0.0, 0.0))
+		var knee := _joint("knee_%s" % tag, hip_joint, Vector3(0.0, -body["thigh"], 0.0))
+		_joint("ankle_%s" % tag, knee, Vector3(0.0, -body["shin"], 0.0))
+
+
+func _build_geometry(player: Dictionary, team: Dictionary, host: Node,
+		body: Dictionary) -> void:
+	var h: float = body["h"]
+	var bulk: float = body["bulk"]
+	var torso: float = body["torso"]
+	var shoulder_half: float = body["shoulder_half"]
+	var hip_half: float = body["hip_half"]
 	var kit := _materials(player, team)
 
-	var hips := _joint("hips", self, Vector3(0.0, hip_y, 0.0))
+	var hips: Node3D = joints["hips"]
 	_segment(hips, kit["shorts"], hip_half * 1.30 * bulk, hip_half * 1.24 * bulk,
 		0.095 * h, 0.80, Vector3(0.0, -0.020 * h, 0.0), false, false)
 
-	# The chest joint sits mid-torso and the shoulders hang off it, so the
-	# shoulder line lands exactly `torso` above the hips, which is what
-	# shoulder_height promises to the shooting code.
-	var spine := _joint("spine", hips, Vector3.ZERO)
+	# One continuous torso. Two stacked cylinders leave a lip across the jersey
+	# where their radii meet.
+	var spine: Node3D = joints["spine"]
 	_segment(spine, kit["jersey"], hip_half * 1.24 * bulk, shoulder_half * 1.00 * bulk,
 		torso * 0.98, 0.62, Vector3(0.0, torso * 0.49, 0.0), true, false)
 
-	var chest := _joint("chest", spine, Vector3(0.0, torso * 0.62, 0.0))
+	var chest: Node3D = joints["chest"]
 	# Trapezius: a flattened mass across the shoulder line. A full sphere here
 	# has the radius of half a shoulder span and swallows the neck.
 	var yoke := _ball(chest, kit["jersey"], shoulder_half * 0.78 * bulk,
@@ -84,20 +147,15 @@ func _build(player: Dictionary, team: Dictionary, host: Node) -> void:
 		Vector3(0.0, torso * 0.375, 0.0), 0.70)
 	_add_number(chest, player, team, host, torso, shoulder_half)
 
-	var head_joint := _joint("head", chest, Vector3(0.0, torso * 0.38, 0.0))
-	head_node = head_joint
-	_segment(head_joint, kit["skin"], 0.042 * h, 0.038 * h, neck * 1.5, 1.0,
-		Vector3(0.0, neck * 0.55, 0.0), false, false)
-	_add_head(head_joint, kit, head_radius, neck, int(player["hair"]))
+	var head_joint: Node3D = joints["head"]
+	_segment(head_joint, kit["skin"], 0.042 * h, 0.038 * h, body["neck"] * 1.5, 1.0,
+		Vector3(0.0, body["neck"] * 0.55, 0.0), false, false)
+	_add_head(head_joint, kit, body["head_radius"], body["neck"], int(player["hair"]))
 
 	for side in [-1.0, 1.0]:
 		var tag := "l" if side > 0.0 else "r"
-		_build_arm(chest, kit, tag, side, shoulder_half, torso, upper_arm, forearm, h, bulk)
-		_build_leg(hips, kit, tag, side, hip_half, thigh, shin, ankle_y, h, bulk)
-
-	for key in JOINTS:
-		pose[key] = Vector3.ZERO
-		_target_pose[key] = Vector3.ZERO
+		_dress_arm(kit, tag, side, body)
+		_dress_leg(kit, tag, body)
 
 
 func _materials(player: Dictionary, team: Dictionary) -> Dictionary:
@@ -124,11 +182,13 @@ func _materials(player: Dictionary, team: Dictionary) -> Dictionary:
 	}
 
 
-func _build_arm(chest: Node3D, kit: Dictionary, tag: String, side: float,
-		shoulder_half: float, torso: float, upper_arm: float, forearm: float,
-		h: float, bulk: float) -> void:
-	var shoulder := _joint("shoulder_%s" % tag, chest,
-		Vector3(shoulder_half * 0.88 * side, torso * 0.38, 0.0))
+func _dress_arm(kit: Dictionary, tag: String, side: float, body: Dictionary) -> void:
+	var h: float = body["h"]
+	var bulk: float = body["bulk"]
+	var upper_arm: float = body["upper_arm"]
+	var forearm: float = body["forearm"]
+
+	var shoulder: Node3D = joints["shoulder_%s" % tag]
 	var deltoid := _ball(shoulder, kit["jersey"], 0.034 * h * bulk,
 		Vector3(0.0, -0.014 * h, 0.0))
 	deltoid.scale = Vector3(0.98, 1.10, 0.92)
@@ -140,26 +200,20 @@ func _build_arm(chest: Node3D, kit: Dictionary, tag: String, side: float,
 	_segment(shoulder, kit["jersey"], 0.038 * h * bulk, 0.035 * h * bulk,
 		upper_arm * 0.34, 0.96, Vector3(0.0, -upper_arm * 0.17, 0.0), false, false)
 
-	var elbow := _joint("elbow_%s" % tag, shoulder, Vector3(0.0, -upper_arm, 0.0))
+	var elbow: Node3D = joints["elbow_%s" % tag]
 	_ball(elbow, kit["skin"], 0.034 * h, Vector3.ZERO)
 	_segment(elbow, kit["skin"], 0.033 * h, 0.027 * h, forearm, 1.0,
 		Vector3(0.0, -forearm * 0.5, 0.0), false, true)
-
-	var hand := Node3D.new()
-	hand.name = "hand_%s" % tag
-	hand.position = Vector3(0.0, -forearm, 0.0)
-	elbow.add_child(hand)
-	_add_hand(hand, kit["skin"], h, side)
-	if side > 0.0:
-		hand_l = hand
-	else:
-		hand_r = hand
+	_add_hand(hand_l if tag == "l" else hand_r, kit["skin"], h, side)
 
 
-func _build_leg(hips: Node3D, kit: Dictionary, tag: String, side: float,
-		hip_half: float, thigh: float, shin: float, ankle_y: float,
-		h: float, bulk: float) -> void:
-	var hip_joint := _joint("hip_%s" % tag, hips, Vector3(hip_half * side, 0.0, 0.0))
+func _dress_leg(kit: Dictionary, tag: String, body: Dictionary) -> void:
+	var h: float = body["h"]
+	var bulk: float = body["bulk"]
+	var thigh: float = body["thigh"]
+	var shin: float = body["shin"]
+
+	var hip_joint: Node3D = joints["hip_%s" % tag]
 	_segment(hip_joint, kit["skin"], 0.055 * h * bulk, 0.040 * h, thigh, 0.94,
 		Vector3(0.0, -thigh * 0.5, 0.0), true, true)
 	# Shorts hang off the thigh so they swing with the leg. Long and slightly
@@ -169,13 +223,12 @@ func _build_leg(hips: Node3D, kit: Dictionary, tag: String, side: float,
 	_ring(hip_joint, kit["trim"], 0.062 * h * bulk, 0.009 * h,
 		Vector3(0.0, -thigh * 0.70, 0.0), 0.90)
 
-	var knee := _joint("knee_%s" % tag, hip_joint, Vector3(0.0, -thigh, 0.0))
+	var knee: Node3D = joints["knee_%s" % tag]
 	_ball(knee, kit["skin"], 0.040 * h, Vector3.ZERO)
 	_segment(knee, kit["skin"], 0.040 * h, 0.028 * h, shin, 0.95,
 		Vector3(0.0, -shin * 0.5, 0.0), false, true)
 
-	var ankle := _joint("ankle_%s" % tag, knee, Vector3(0.0, -shin, 0.0))
-	_add_shoe(ankle, kit, h, ankle_y)
+	_add_shoe(joints["ankle_%s" % tag], kit, h, body["ankle_y"])
 
 
 func _add_hand(hand: Node3D, skin: Material, h: float, side: float) -> void:
