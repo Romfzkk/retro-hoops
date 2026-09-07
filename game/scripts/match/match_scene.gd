@@ -425,7 +425,7 @@ func _score(basket: int, points: int) -> void:
 		_begin_free_throws(fouled, 1)
 		return
 	hud.announce("%d PTS" % points, points == 3)
-	_dead_ball(1 - scoring_team, INBOUND_PAUSE)
+	_dead_ball(1 - scoring_team, INBOUND_PAUSE, true)
 
 
 func _resolve_miss() -> void:
@@ -872,14 +872,14 @@ func _tip_target(tipper: PlayerPawn) -> PlayerPawn:
 	return best if best != null else tipper
 
 
-func _dead_ball(to_team: int, pause: float) -> void:
+func _dead_ball(to_team: int, pause: float, from_baseline := false) -> void:
 	ctx.phase = MatchContext.Phase.DEAD
 	clock.running = false
 	ball.go_loose()
 	ball.set_paused(true)
 	_phase_timer = pause
 	_resume_phase = MatchContext.Phase.LIVE
-	_position_for_inbound(to_team)
+	_position_for_inbound(to_team, from_baseline)
 
 
 func _resume_play() -> void:
@@ -904,32 +904,51 @@ func _resume_play() -> void:
 	clock.running = true
 
 
-func _position_for_inbound(to_team: int) -> void:
+func _position_for_inbound(to_team: int, from_baseline := false) -> void:
 	var sign_x := CourtMetrics.attack_sign(to_team)
 	for team_index in 2:
 		for pawn: PlayerPawn in squads[team_index]:
 			pawn.velocity = Vector3.ZERO
 			pawn.lose_ball()
-			pawn.global_position = _formation_spot(pawn, team_index, to_team)
+			pawn.global_position = _formation_spot(pawn, team_index, to_team,
+				from_baseline)
 	var handler: PlayerPawn = squads[to_team][0]
 	for pawn: PlayerPawn in squads[to_team]:
 		if int(pawn.data["pos"]) == League.Pos.PG:
 			handler = pawn
 			break
+	if from_baseline:
+		# Behind the endline, where the ball is actually taken from. A held
+		# ball is exempt from the out of bounds check, so standing there is
+		# legal until they step in with it.
+		handler.global_position = Vector3(
+			-sign_x * (CourtMetrics.HALF_LENGTH + 0.8), 0.0,
+			clampf(handler.global_position.z, -2.4, 2.4))
 	ball.set_paused(false)
 	handler.take_ball(ball)
 	ctx.possession = to_team
 	clock.reset_shot_clock()
 
 
-func _formation_spot(pawn: PlayerPawn, team_index: int, offence_team: int) -> Vector3:
-	# Offence sets up in their attacking half, defence drops back in front.
+func _formation_spot(pawn: PlayerPawn, team_index: int, offence_team: int,
+		from_baseline := false) -> Vector3:
 	var attack_sign := CourtMetrics.attack_sign(offence_team)
 	var slot := pawn.lineup_slot
 	var spread := (float(slot) - float(squads[team_index].size() - 1) * 0.5) * 2.9
+	var across := clampf(spread, -CourtMetrics.HALF_WIDTH + 1.0,
+		CourtMetrics.HALF_WIDTH - 1.0)
+	if from_baseline:
+		# Conceding a basket restarts you under your own rim, with the ball to
+		# bring up. Spawning the inbounding side in the half they attack meant
+		# a made basket teleported them into the other team's third.
+		var back_depth := 3.2 if team_index == offence_team else 10.2
+		return Vector3(
+			-attack_sign * (CourtMetrics.HALF_LENGTH - back_depth - float(slot) * 0.4),
+			0.0, across)
+	# Offence sets up in their attacking half, defence drops back in front.
 	var depth := 9.5 if team_index == offence_team else 6.2
 	return Vector3(attack_sign * (CourtMetrics.HALF_LENGTH - depth - float(slot) * 0.4),
-		0.0, clampf(spread, -CourtMetrics.HALF_WIDTH + 1.0, CourtMetrics.HALF_WIDTH - 1.0))
+		0.0, across)
 
 
 func _finish() -> void:
