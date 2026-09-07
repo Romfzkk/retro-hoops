@@ -64,6 +64,8 @@ func _record_into_season() -> void:
 	if _recorded or day < 0 or Game.league.is_empty():
 		return
 	_recorded = true
+	if _record_into_playoffs():
+		return
 	var schedule: Array = Game.league["schedule"]
 	if day >= schedule.size():
 		return
@@ -82,6 +84,42 @@ func _record_into_season() -> void:
 			Game.league["day"] = day + 1
 		Game.save_career()
 		return
+
+
+# A playoff game goes into the bracket, and the rest of the round is simulated
+# so the next opponent is known by the time you get back to the hub.
+func _record_into_playoffs() -> bool:
+	var playoffs: Dictionary = Game.league.get("playoffs", {})
+	if playoffs.is_empty() or int(playoffs["champion"]) >= 0:
+		return false
+	var games: Array = playoffs["rounds"][int(playoffs["round"])]
+	var found := false
+	for game in games:
+		if int(game["h"]) != int(_result["home"]) or int(game["a"]) != int(_result["away"]):
+			continue
+		if bool(game["played"]):
+			return true
+		game["hs"] = int(_result["home_score"])
+		game["as"] = int(_result["away_score"])
+		game["played"] = true
+		found = true
+		break
+	if not found:
+		return false
+
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	for game in games:
+		if bool(game["played"]):
+			continue
+		var simulated := SeasonSim.play(Game.team_by_id(int(game["h"])),
+			Game.team_by_id(int(game["a"])), rng)
+		game["hs"] = simulated["home"]
+		game["as"] = simulated["away"]
+		game["played"] = true
+	League.advance_playoffs(playoffs)
+	Game.save_career()
+	return true
 
 
 func _draw_side_panel(scale: float) -> void:

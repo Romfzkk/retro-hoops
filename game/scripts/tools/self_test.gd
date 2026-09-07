@@ -17,6 +17,7 @@ func _ready() -> void:
 	_season_simulation()
 	_sound_bank()
 	_match_clock()
+	_full_season()
 
 	print("\n%d checks, %d failed" % [_checks, _failures.size()])
 	for failure in _failures:
@@ -243,3 +244,41 @@ func _match_clock() -> void:
 	_check("the shot clock never exceeds the period", fresh.shot_clock <= 8.0)
 	_check("advancing a period resets the clock",
 		fresh.advance_quarter() and is_equal_approx(fresh.remaining, 300.0))
+
+
+# Plays a whole year with the simulator to prove the season actually finishes
+# and produces one champion, rather than stalling in a round.
+func _full_season() -> void:
+	var lg := League.new_league(2026)
+	var days: int = (lg["schedule"] as Array).size()
+	var guard := 0
+	while not League.regular_season_done(lg) and guard < days + 10:
+		guard += 1
+		SeasonSim.advance_day(lg)
+		if SeasonSim.day_complete(lg):
+			lg["day"] = int(lg["day"]) + 1
+	_check("the regular season finishes", League.regular_season_done(lg))
+
+	var games := 0
+	for team in lg["teams"]:
+		games = maxi(games, int(team["w"]) + int(team["l"]))
+	_check("every team played a full season (%d games)" % games, games == days)
+
+	var playoffs := League.make_playoffs(lg)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	var rounds := 0
+	while int(playoffs["champion"]) < 0 and rounds < 8:
+		rounds += 1
+		var current: Array = playoffs["rounds"][int(playoffs["round"])]
+		for game in current:
+			var result := SeasonSim.play(lg["teams"][int(game["h"])],
+				lg["teams"][int(game["a"])], rng)
+			game["hs"] = result["home"]
+			game["as"] = result["away"]
+			game["played"] = true
+		League.advance_playoffs(playoffs)
+	_check("the playoffs produce a champion", int(playoffs["champion"]) >= 0)
+	_check("the bracket is four rounds", rounds == 4)
+	_check("the final is a single game",
+		(playoffs["rounds"][3] as Array).size() == 1)

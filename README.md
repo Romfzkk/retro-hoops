@@ -32,6 +32,7 @@ the playoffs. It is not finished — see [Limitations](#limitations) and
 **Modes**
 - [x] Quick play with team, arena, period length and opponent selection
 - [x] Season: 30 teams, two conferences, 58-game double round robin, standings
+- [x] Playoffs: top eight a side, bracket through to a champion
 - [x] Other league games simulated so the table moves while you play
 - [x] Local two player on one screen (keyboard plus pad, or two pads)
 - [x] Online two player, host authoritative, LAN discovery or direct address
@@ -128,7 +129,7 @@ so you can add your own. Format and an example: [docs/player-packs.md](docs/play
 ## Development tools
 
 ```bash
-# Run the self tests (2745 checks: league, geometry, shot solver, packs, audio)
+# Run the self tests (2750 checks: league, geometry, shot solver, packs, audio, a full season)
 godot --headless --path game res://scenes/self_test.tscn
 
 # Play a headless game and print a box score, for balance work
@@ -182,7 +183,6 @@ Things that are genuinely not there or not good yet:
 - Half-court rules for 3-on-3
 
 **Planned**
-- Playoffs through to a final, with a champion recorded in league history
 - Create-a-player and roster editing in game
 - Set plays and defensive schemes
 - Multi-season careers with progression and an offseason
