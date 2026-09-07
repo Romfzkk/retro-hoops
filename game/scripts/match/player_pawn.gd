@@ -50,6 +50,9 @@ var shot_charge := 0.0
 var shot_released_this_attempt := false
 var ball_hand := 1.0
 var pickup_cooldown := 0.0
+## Set on clients in an online game: this pawn is drawn from host snapshots
+## and never simulates locally.
+var network_remote := false
 
 var _max_speed := 7.0
 var _acceleration := 24.0
@@ -58,6 +61,11 @@ var _rng := RandomNumberGenerator.new()
 var _dribble_phase := 0.0
 var _facing := Vector3.FORWARD
 var _pending_pass: PlayerPawn
+var _net_position := Vector3.ZERO
+var _net_yaw := 0.0
+var _net_speed := 0.0
+var _net_flags := 0
+var _net_stamina := 1.0
 
 
 static func create(player: Dictionary, team: Dictionary, team_idx: int,
@@ -125,7 +133,19 @@ func distance_to_rim() -> float:
 	return Vector2(global_position.x - r.x, global_position.z - r.z).length()
 
 
+func apply_network_state(position_: Vector3, yaw: float, speed: float,
+		flags: int, stamina_: float) -> void:
+	_net_position = position_
+	_net_yaw = yaw
+	_net_speed = speed
+	_net_flags = flags
+	_net_stamina = stamina_
+
+
 func _physics_process(delta: float) -> void:
+	if network_remote:
+		_tick_remote(delta)
+		return
 	state_time += delta
 	pickup_cooldown = maxf(0.0, pickup_cooldown - delta)
 	_dribble_phase += delta * TAU * 2.0
@@ -155,6 +175,31 @@ func _physics_process(delta: float) -> void:
 	_update_ball_anchor(delta)
 	_drive_animator(delta)
 	intent.clear_edges()
+
+
+# Interpolate toward the last snapshot and drive the rig from the packed
+# flags. Nothing here decides anything; the host already did.
+func _tick_remote(delta: float) -> void:
+	var blend := clampf(delta * 14.0, 0.0, 1.0)
+	global_position = global_position.lerp(_net_position, blend)
+	rotation.y = lerp_angle(rotation.y, _net_yaw, blend)
+	stamina = _net_stamina
+
+	var next_state := (_net_flags & 0x0F) as State
+	state_time = 0.0 if next_state != state else state_time + delta
+	state = next_state
+	has_ball = bool(_net_flags & (1 << 4))
+	ball_hand = 1.0 if bool(_net_flags & (1 << 6)) else -1.0
+
+	animator.speed = _net_speed
+	animator.grounded = bool(_net_flags & (1 << 5))
+	animator.airborne = 0.0
+	animator.has_ball = has_ball
+	animator.ball_hand = ball_hand
+	animator.defending = not has_ball
+	animator.action = _animator_action()
+	animator.action_t = _action_progress()
+	animator.tick(delta)
 
 
 func _tick_locomotion(delta: float) -> void:

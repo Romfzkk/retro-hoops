@@ -32,6 +32,7 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	set_process_input(true)
 	set_process(true)
+	FrameCapture.attach(self)
 
 
 ## Anchors do not always resolve before the first frame inside a CanvasLayer,

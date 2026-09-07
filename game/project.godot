@@ -12,6 +12,7 @@ config/icon="res://icon.svg"
 
 Settings="*res://scripts/core/settings.gd"
 Game="*res://scripts/core/game_state.gd"
+Net="*res://scripts/net/net_session.gd"
 
 [display]
 

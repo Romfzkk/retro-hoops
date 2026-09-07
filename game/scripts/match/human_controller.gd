@@ -5,7 +5,7 @@ extends RefCounted
 # Player one reads the action map (keyboard or any pad); player two reads a
 # specific pad directly so both can play on one screen.
 
-enum Device { ACTIONS, PAD }
+enum Device { ACTIONS, PAD, REMOTE }
 
 const SWITCH_COOLDOWN := 0.25
 const STICK_DEADZONE := 0.22
@@ -15,6 +15,9 @@ var device: Device = Device.ACTIONS
 var pad_id := 0
 var active: PlayerPawn
 var squad: Array[PlayerPawn] = []
+
+## The intent built this frame. On a client this is what gets uploaded.
+var local_intent := PlayerIntent.new()
 
 var _switch_cooldown := 0.0
 var _touch: TouchControls
@@ -38,6 +41,9 @@ func tick(delta: float, ctx: MatchContext) -> void:
 
 	var intent := active.intent
 	intent.reset()
+	if device == Device.REMOTE:
+		_copy_remote(intent)
+		return
 	intent.move = _stick()
 	intent.aim = intent.move
 	intent.sprint = _held("sprint")
@@ -50,6 +56,33 @@ func tick(delta: float, ctx: MatchContext) -> void:
 	if _pressed("switch_player") and _switch_cooldown <= 0.0:
 		_switch_cooldown = SWITCH_COOLDOWN
 		_switch_to_nearest(ctx)
+	_remember(intent)
+
+
+# The host applies whatever the visiting client last uploaded.
+func _copy_remote(intent: PlayerIntent) -> void:
+	var source := Net.remote_intent
+	intent.move = source.move
+	intent.aim = source.aim
+	intent.sprint = source.sprint
+	intent.shoot_held = source.shoot_held
+	intent.shoot_pressed = source.shoot_pressed
+	intent.shoot_released = source.shoot_released
+	intent.pass_pressed = source.pass_pressed
+	intent.special_pressed = source.special_pressed
+	source.clear_edges()
+
+
+func _remember(intent: PlayerIntent) -> void:
+	local_intent.move = intent.move
+	local_intent.aim = intent.aim
+	local_intent.sprint = intent.sprint
+	local_intent.shoot_held = intent.shoot_held
+	local_intent.shoot_pressed = intent.shoot_pressed
+	local_intent.shoot_released = intent.shoot_released
+	local_intent.pass_pressed = intent.pass_pressed
+	local_intent.special_pressed = intent.special_pressed
+	local_intent.switch_pressed = intent.switch_pressed
 
 
 func _follow_possession(ctx: MatchContext) -> void:

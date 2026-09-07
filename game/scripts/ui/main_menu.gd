@@ -43,6 +43,7 @@ func _ready() -> void:
 func _build_rows() -> Array[Dictionary]:
 	var rows: Array[Dictionary] = [
 		{"id": "quick", "label": "QUICK PLAY"},
+		{"id": "online", "label": "ONLINE"},
 	]
 	if Game.has_career():
 		rows.append({"id": "continue", "label": "CONTINUE SEASON"})
@@ -70,6 +71,8 @@ func _on_chosen(id: String) -> void:
 	match id:
 		"quick":
 			Game.goto("res://scenes/exhibition_setup.tscn")
+		"online":
+			Game.goto("res://scenes/online_setup.tscn")
 		"continue":
 			if Game.load_career():
 				Game.goto("res://scenes/season_hub.tscn")

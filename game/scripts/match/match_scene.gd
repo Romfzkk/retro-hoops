@@ -151,6 +151,9 @@ func _setup_camera() -> void:
 
 
 func _setup_controllers() -> void:
+	if setup.online:
+		_setup_online_controllers()
+		return
 	if _balance_run:
 		# A headless balance run has nobody at the keyboard, so let the AI
 		# drive both benches.
@@ -169,6 +172,26 @@ func _setup_controllers() -> void:
 		if not _balance_run:
 			var team: Dictionary = setup.home if controller.team_index == 0 else setup.away
 			markers.append(PlayerMarker.create(self, Color(team["primary"])))
+
+
+# Online is host-authoritative. The host drives its own side locally and the
+# visitor's side from uploaded intent; the client simulates nothing.
+func _setup_online_controllers() -> void:
+	var local := Net.local_team()
+	humans.append(HumanController.new(local, HumanController.Device.ACTIONS))
+	if Net.is_host():
+		humans.append(HumanController.new(1 - local, HumanController.Device.REMOTE))
+	else:
+		ball.network_remote = true
+		for team_index in 2:
+			for pawn: PlayerPawn in squads[team_index]:
+				pawn.network_remote = true
+	for controller in humans:
+		controller.squad.assign(squads[controller.team_index])
+		if not _balance_run:
+			var team: Dictionary = setup.home if controller.team_index == 0 else setup.away
+			markers.append(PlayerMarker.create(self, Color(team["primary"])))
+	MatchSync.attach(self)
 
 
 func _setup_hud() -> void:
@@ -194,6 +217,9 @@ func _physics_process(delta: float) -> void:
 
 	for controller in humans:
 		controller.tick(delta, ctx)
+
+	if setup.online and not Net.is_host():
+		return
 	for ai in ais:
 		ai.tick(delta, ctx)
 

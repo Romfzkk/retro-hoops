@@ -32,6 +32,8 @@ var rebound_ready := true
 var _floor_cooldown := 0.0
 var _pass_age := 0.0
 var _reached_rim_height := false
+var network_remote := false
+var _net_position := Vector3.ZERO
 
 
 static func create() -> Ball:
@@ -80,7 +82,18 @@ func _ready() -> void:
 	body_entered.connect(_on_body_entered)
 
 
+func apply_network_state(position_: Vector3, velocity: Vector3, new_state: int) -> void:
+	_net_position = position_
+	linear_velocity = velocity
+	state = new_state as State
+
+
 func _physics_process(delta: float) -> void:
+	if network_remote:
+		# Snapshots arrive at 24Hz, so smooth between them rather than popping.
+		global_position = global_position.lerp(_net_position,
+			clampf(delta * 18.0, 0.0, 1.0))
+		return
 	_floor_cooldown = maxf(0.0, _floor_cooldown - delta)
 	if state == State.HELD and is_instance_valid(hold_anchor):
 		global_position = hold_anchor.global_position
