@@ -7,11 +7,12 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 // histogram is clearly bimodal: skin peaks around 0.3-0.55, kit colour around
 // 0.85-1.0, with a trough at 0.78 between them.
 //
-// Hair and beard are the same black as the jersey and cannot be separated by
-// colour at any threshold. The texture's alpha carries a mask of the head,
-// baked from the mesh itself, so those texels are left alone. A height cut was
-// tried first and sliced a straight line across the jersey, because the head
-// is not a horizontal plane.
+// Colour alone cannot do all of it. A shadowed forearm and a black jersey are
+// both dark and near neutral, which is what speckled kit colour across the
+// arms and hands, and hair is the same black as the jersey. So the texture's
+// alpha carries a region baked from the rig: what the bone weights already
+// know is not guessed at again. Only the trunk, where jersey, shorts and skin
+// share bones, is left to the colour classifier.
 
 uniform sampler2D base_texture : source_color, filter_linear_mipmap_anisotropic;
 uniform vec3 jersey_colour : source_color = vec3(0.11, 0.31, 0.61);
@@ -40,17 +41,21 @@ void fragment() {
 	float luma = dot(source, vec3(0.2126, 0.7152, 0.0722));
 
 	vec3 tinted = source;
-	if (sampled.a > 0.5) {
+	if (sampled.a > 0.70) {
+		// Trunk and legs: jersey, shorts and skin share these bones, so the
+		// saturation split decides.
 		if (sat > trim_saturation && high > 0.06) {
 			tinted = retint(trim_colour, luma, 0.30, 0.62);
 		} else if (sat < fabric_saturation && high < 0.30) {
-			// Neutral and dark is fabric. Shadowed skin stays warm and keeps
-			// enough saturation to fall through to the branch below.
 			tinted = retint(jersey_colour, luma, 0.05, 0.72);
 		} else {
 			tinted = retint(skin_colour, luma, 0.16, 0.62);
 		}
+	} else if (sampled.a > 0.19) {
+		// Arms and hands are skin whatever the shading says.
+		tinted = retint(skin_colour, luma, 0.16, 0.62);
 	}
+	// Anything darker than that is hair, beard or scalp, and keeps its colour.
 
 	ALBEDO = tinted;
 	ROUGHNESS = roughness_value;
