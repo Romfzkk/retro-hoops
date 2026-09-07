@@ -31,6 +31,8 @@ func _ready() -> void:
 	_menu.subtitle = "30 teams. One rock."
 	_menu.footer = "Move  W/S    Select  Enter"
 	_menu.dim_background = false
+	_menu.art_slot = "hero"
+	_menu.art_caption = "Season 1"
 	_menu.rows = _build_rows()
 	_menu.chosen.connect(_on_chosen)
 	var layer := CanvasLayer.new()

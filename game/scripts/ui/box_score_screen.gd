@@ -10,6 +10,7 @@ var _recorded := false
 
 
 func _ready() -> void:
+	art_banner = "champion"
 	super()
 	_result = Game.last_box_score
 	if _result.is_empty():

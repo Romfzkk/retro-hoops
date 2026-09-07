@@ -15,6 +15,7 @@ var _opponent_is_human := false
 
 
 func _ready() -> void:
+	art_banner = "tipoff"
 	super()
 	_league = Game.exhibition_league()
 	_teams = _league["teams"]

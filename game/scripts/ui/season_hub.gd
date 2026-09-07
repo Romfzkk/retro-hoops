@@ -9,6 +9,7 @@ var _status := ""
 
 
 func _ready() -> void:
+	art_banner = "season"
 	super()
 	if Game.league.is_empty() and not Game.load_career():
 		Game.goto("res://scenes/main_menu.tscn")

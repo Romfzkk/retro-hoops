@@ -8,7 +8,7 @@ extends Control
 signal chosen(id: String)
 signal cancelled()
 
-const ROW_HEIGHT := 62.0
+const ROW_HEIGHT := 66.0
 const ROW_GAP := 4.0
 const PANEL_WIDTH := 460.0
 const REPEAT_DELAY := 0.34
@@ -23,6 +23,14 @@ var footer := "Move  W/S    Select  Enter    Back  Esc"
 var selected := 0
 ## False keeps a live 3D scene readable behind the menu.
 var dim_background := true
+## Art slot drawn in the detail area, from UiArt.SLOTS. Empty draws nothing.
+var art_slot := ""
+## Shown under the art, if there is art.
+var art_caption := ""
+## Wide slot along the bottom of the detail area. Screens that already fill
+## that area with their own content use this instead of `art_slot`; the detail
+## rect shrinks to make room, so nothing has to be moved by hand.
+var art_banner := ""
 
 var _hold_direction := 0
 var _hold_time := 0.0
@@ -120,40 +128,71 @@ func _draw() -> void:
 	_draw_header(scale)
 	_draw_rows(scale)
 	_draw_side_panel(scale)
+	_draw_art_banner(scale)
 	_draw_footer(scale)
 
 
 ## Screens over live 3D keep the scene visible and rely on the column block
 ## for contrast; the rest tint the whole frame down.
 func _draw_backdrop() -> void:
+	var scale := UiTheme.scale_for(view())
 	if dim_background:
 		var wash := UiTheme.INK
-		wash.a = 0.72
+		wash.a = 0.80
 		draw_rect(Rect2(Vector2.ZERO, view()), wash)
+		_draw_vignette()
 		return
-	# Broadcast lower-third: a solid band down the left so the type always has
-	# something to sit on, whatever the camera is looking at.
-	var scale := UiTheme.scale_for(view())
-	var band := Rect2(Vector2.ZERO,
-		Vector2(content_left(scale) + (PANEL_WIDTH + UiTheme.XXL) * scale, view().y))
+	# Broadcast lower-third. The band fades out rather than ending on a hard
+	# edge, which is the difference between type sitting on the picture and a
+	# panel pasted over it.
+	var solid := content_left(scale) + (PANEL_WIDTH + UiTheme.S) * scale
 	var ink := UiTheme.INK
-	ink.a = 0.82
-	draw_rect(band, ink)
-	draw_line(Vector2(band.end.x, 0.0), Vector2(band.end.x, view().y),
-		UiTheme.LINE, UiTheme.HAIRLINE)
+	ink.a = 0.88
+	draw_rect(Rect2(Vector2.ZERO, Vector2(solid, view().y)), ink)
+	var fade := UiTheme.XXL * 5.0 * scale
+	var steps := 14
+	for i in steps:
+		var t := float(i) / float(steps)
+		var strip := UiTheme.INK
+		strip.a = 0.88 * (1.0 - t)
+		draw_rect(Rect2(Vector2(solid + fade * t, 0.0),
+			Vector2(fade / float(steps) + 1.0, view().y)), strip)
+	# A single accent hairline is enough to read as an edge.
+	var edge := UiTheme.ORANGE
+	edge.a = 0.55
+	draw_rect(Rect2(Vector2(solid, 0.0), Vector2(2.0 * scale, view().y)), edge)
+	_draw_vignette()
+
+
+## Corners pulled down so the eye stays on the middle of the frame.
+func _draw_vignette() -> void:
+	var height := view().y
+	var steps := 10
+	for i in steps:
+		var t := float(i) / float(steps)
+		var shade := UiTheme.INK
+		shade.a = 0.30 * t * t
+		var band := height * 0.06 * (1.0 - t)
+		draw_rect(Rect2(Vector2(0.0, height - band * float(steps - i)),
+			Vector2(view().x, band)), shade)
 
 
 func _draw_header(scale: float) -> void:
 	var left := content_left(scale)
-	var top := 96.0 * scale
-	draw_rect(Rect2(Vector2(left, top - 46.0 * scale),
-		Vector2(UiTheme.ACCENT_BAR * scale * 2.0, 58.0 * scale)), UiTheme.ORANGE)
-	UiTheme.label(self, title, Vector2(left + UiTheme.L * scale, top),
-		UiTheme.display_font(), UiTheme.size(UiTheme.TITLE, scale), UiTheme.TEXT)
+	var top := 118.0 * scale
+	# Title carries the screen. A 44px heading on a 1080 frame was reading as a
+	# web page's h1 rather than as a game's name.
+	var size := UiTheme.size(UiTheme.DISPLAY, scale)
+	UiTheme.label(self, title, Vector2(left, top), UiTheme.display_font(),
+		size, UiTheme.TEXT)
+	var width := UiTheme.text_width(title, UiTheme.display_font(), size)
+	draw_rect(Rect2(Vector2(left, top + 14.0 * scale),
+		Vector2(maxf(width, 120.0 * scale), UiTheme.ACCENT_BAR * scale)),
+		UiTheme.ORANGE)
 	if not subtitle.is_empty():
-		UiTheme.label(self, subtitle,
-			Vector2(left + UiTheme.L * scale, top + 30.0 * scale),
-			UiTheme.text_font(), UiTheme.size(UiTheme.BODY, scale), UiTheme.TEXT_DIM)
+		UiTheme.label(self, subtitle.to_upper(),
+			Vector2(left, top + 40.0 * scale), UiTheme.bold_font(),
+			UiTheme.size(UiTheme.LABEL, scale), UiTheme.TEXT_DIM)
 
 
 func _draw_rows(scale: float) -> void:
@@ -169,18 +208,30 @@ func _draw_rows(scale: float) -> void:
 
 func _draw_row(rect: Rect2, row: Dictionary, is_selected: bool, scale: float) -> void:
 	var enabled := bool(row.get("enabled", true))
-	var fill := UiTheme.SURFACE_HI if is_selected else UiTheme.SURFACE
-	UiTheme.panel(self, rect, fill, 0.98 if is_selected else 0.86)
+	# Only the highlighted row is a panel. Filling every row the same made the
+	# list read as web navigation instead of a selection.
 	if is_selected:
-		draw_rect(Rect2(rect.position, Vector2(UiTheme.ACCENT_BAR * scale * 1.6,
-			rect.size.y)), UiTheme.ORANGE)
+		UiTheme.panel(self, rect, UiTheme.SURFACE_HI, 0.98)
+		draw_rect(Rect2(rect.position,
+			Vector2(UiTheme.ACCENT_BAR * scale * 2.0, rect.size.y)), UiTheme.ORANGE)
+		var glow := UiTheme.ORANGE
+		glow.a = 0.10
+		draw_rect(Rect2(rect.position,
+			Vector2(rect.size.x * 0.45, rect.size.y)), glow)
+	else:
+		draw_line(Vector2(rect.position.x, rect.end.y),
+			Vector2(rect.end.x, rect.end.y), UiTheme.LINE, UiTheme.HAIRLINE)
 
 	var ink := UiTheme.TEXT if enabled else UiTheme.TEXT_DIM.darkened(0.25)
 	if is_selected:
 		ink = UiTheme.TEXT
+	elif enabled:
+		ink = UiTheme.TEXT_DIM
+	var indent := (UiTheme.XXL if is_selected else UiTheme.XL) * scale
+	var label_size := UiTheme.size(UiTheme.TITLE if is_selected else UiTheme.HEAD, scale)
 	UiTheme.label(self, String(row["label"]),
-		Vector2(rect.position.x + UiTheme.XL * scale, rect.position.y + 42.0 * scale),
-		UiTheme.display_font(), UiTheme.size(UiTheme.HEAD, scale), ink)
+		Vector2(rect.position.x + indent, rect.position.y + 44.0 * scale),
+		UiTheme.display_font(), label_size, ink)
 
 	if row.has("value"):
 		var value := String(row["value"])
@@ -200,17 +251,47 @@ func _draw_row(rect: Rect2, row: Dictionary, is_selected: bool, scale: float) ->
 
 
 ## Right-hand detail area. Screens override it to show context for the
-## highlighted row.
-func _draw_side_panel(_scale: float) -> void:
-	pass
+## highlighted row, or set `art_slot` to hang a piece of artwork there.
+func _draw_side_panel(scale: float) -> void:
+	if art_slot.is_empty():
+		return
+	var area := detail_rect(scale)
+	# Kept to a poster on the right rather than filling the detail area. Art
+	# that spans the whole right side buries the court it is sitting on.
+	var cap := minf(area.size.x * 0.52, view().x * 0.22)
+	area = Rect2(Vector2(area.end.x - cap, area.position.y),
+		Vector2(cap, area.size.y * 0.82))
+	if area.size.x < 80.0 * scale or area.size.y < 80.0 * scale:
+		return
+	# Sized to the slot's authored aspect and pinned to the top of the area, so
+	# artwork is never stretched to fill whatever space is left over.
+	var wanted := UiArt.aspect(art_slot)
+	var height := minf(area.size.y, area.size.x / maxf(wanted, 0.01))
+	var width := height * wanted
+	if width > area.size.x:
+		width = area.size.x
+		height = width / maxf(wanted, 0.01)
+	var frame := Rect2(Vector2(area.position.x + (area.size.x - width) * 0.5,
+		area.position.y), Vector2(width, height))
+	UiArt.draw_slot(self, frame, art_slot, scale)
+	draw_rect(frame, UiTheme.LINE, false, UiTheme.HAIRLINE)
+	draw_rect(Rect2(frame.position, Vector2(UiTheme.ACCENT_BAR * scale * 2.0,
+		28.0 * scale)), UiTheme.ORANGE)
+	if not art_caption.is_empty():
+		UiTheme.label(self, art_caption.to_upper(),
+			Vector2(frame.position.x, frame.end.y + 26.0 * scale),
+			UiTheme.bold_font(), UiTheme.size(UiTheme.LABEL, scale), UiTheme.TEXT_DIM)
 
 
 func _draw_footer(scale: float) -> void:
-	var y := view().y - 44.0 * scale
-	draw_line(Vector2(content_left(scale), y - 26.0 * scale),
-		Vector2(view().x - content_left(scale), y - 26.0 * scale),
+	var y := view().y - 46.0 * scale
+	var left := content_left(scale)
+	draw_line(Vector2(left, y - 24.0 * scale),
+		Vector2(left + PANEL_WIDTH * scale, y - 24.0 * scale),
 		UiTheme.LINE, UiTheme.HAIRLINE)
-	UiTheme.label(self, footer, Vector2(content_left(scale), y),
+	draw_rect(Rect2(Vector2(left, y - 10.0 * scale),
+		Vector2(UiTheme.ACCENT_BAR * scale, 14.0 * scale)), UiTheme.ORANGE)
+	UiTheme.label(self, footer, Vector2(left + UiTheme.M * scale, y),
 		UiTheme.text_font(), UiTheme.size(UiTheme.LABEL, scale), UiTheme.TEXT_DIM)
 
 
@@ -224,6 +305,29 @@ func rows_top(scale: float) -> float:
 
 func detail_rect(scale: float) -> Rect2:
 	var left := content_left(scale) + (PANEL_WIDTH + UiTheme.XXL) * scale
+	var height := view().y - rows_top(scale) - 110.0 * scale
+	if not art_banner.is_empty():
+		height -= _banner_rect(scale).size.y + UiTheme.XL * scale
 	return Rect2(Vector2(left, rows_top(scale)),
-		Vector2(view().x - left - content_left(scale),
-			view().y - rows_top(scale) - 110.0 * scale))
+		Vector2(view().x - left - content_left(scale), height))
+
+
+func _banner_rect(scale: float) -> Rect2:
+	var left := content_left(scale) + (PANEL_WIDTH + UiTheme.XXL) * scale
+	var width := view().x - left - content_left(scale)
+	var height := minf(width / maxf(UiArt.aspect(art_banner), 0.01),
+		view().y * 0.26)
+	return Rect2(Vector2(left, view().y - 110.0 * scale - height),
+		Vector2(width, height))
+
+
+func _draw_art_banner(scale: float) -> void:
+	if art_banner.is_empty():
+		return
+	var frame := _banner_rect(scale)
+	if frame.size.x < 120.0 * scale or frame.size.y < 60.0 * scale:
+		return
+	UiArt.draw_slot(self, frame, art_banner, scale)
+	draw_rect(frame, UiTheme.LINE, false, UiTheme.HAIRLINE)
+	draw_rect(Rect2(frame.position,
+		Vector2(UiTheme.ACCENT_BAR * scale * 2.0, 28.0 * scale)), UiTheme.ORANGE)
