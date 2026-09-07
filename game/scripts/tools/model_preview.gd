@@ -28,6 +28,15 @@ func _ready() -> void:
 
 
 func _load_glb(path: String) -> Node3D:
+	# Anything already inside the project has been through the importer, which
+	# is the only way FBX and Collada get read at all. Loose .glb files are
+	# parsed straight off disk so an export can be checked without copying it in.
+	if path.begins_with("res://"):
+		var scene := ResourceLoader.load(path) as PackedScene
+		if scene == null:
+			push_error("%s did not import as a scene" % path)
+			return null
+		return scene.instantiate() as Node3D
 	if not FileAccess.file_exists(path):
 		push_error("No file at %s" % path)
 		return null
@@ -76,8 +85,11 @@ func _report(path: String, root: Node3D) -> void:
 	print("\n--- %s ---" % path.get_file())
 	print("  meshes            %d  (%d surfaces, %d vertices)"
 		% [meshes.size(), surfaces, vertices])
-	print("  size              %.2f x %.2f x %.2f  (a player is about 1.98 tall)"
+	print("  size              %.3f x %.3f x %.3f  (a player is about 1.98 tall)"
 		% [bounds.size.x, bounds.size.y, bounds.size.z])
+	if bounds.size.y > 0.001 and absf(bounds.size.y - REFERENCE_HEIGHT) > 0.4:
+		print("  scale needed      x%.1f to stand %.2fm"
+			% [REFERENCE_HEIGHT / bounds.size.y, REFERENCE_HEIGHT])
 	print("  normals           %s" % _mark(has_normals))
 	print("  UVs               %s" % _mark(has_uvs))
 	print("  skin weights      %s" % _mark(has_bone_weights))
@@ -88,6 +100,11 @@ func _report(path: String, root: Node3D) -> void:
 		% _mark(not root.find_children("*", "AnimationPlayer", true, false).is_empty()))
 	var blocked := not has_uvs or not has_bone_weights or skeletons.is_empty()
 	print("  usable as a player: %s" % ("no" if blocked else "yes"))
+	for skeleton: Skeleton3D in skeletons:
+		print("  skeleton '%s': %d bones" % [skeleton.name, skeleton.get_bone_count()])
+		for bone in skeleton.get_bone_count():
+			print("      %2d %-28s parent %d" % [bone, skeleton.get_bone_name(bone),
+				skeleton.get_bone_parent(bone)])
 
 
 func _mark(present: bool) -> String:
@@ -159,6 +176,13 @@ func _frame_camera(model: Node3D) -> void:
 	var meshes: Array[MeshInstance3D] = []
 	_collect(model, meshes)
 	var box := _bounds(meshes)
+	# Mixamo exports in centimetres and other tools vary, so normalise to a
+	# player's height for the preview rather than rendering a speck or a tower.
+	if box.size.y > 0.001:
+		var fit := REFERENCE_HEIGHT / box.size.y
+		if absf(fit - 1.0) > 0.2:
+			model.scale = Vector3.ONE * fit
+			box = AABB(box.position * fit, box.size * fit)
 	# Sit the model on the floor whatever origin it was exported around.
 	model.position.y = -box.position.y
 	var height := maxf(box.size.y, 0.5)

@@ -7,3 +7,6 @@
 /build/
 game/.godot/
 game/android/
+
+# Character exports under test, dropped in by tools/dev/inspect_model.sh
+game/devmodels/
