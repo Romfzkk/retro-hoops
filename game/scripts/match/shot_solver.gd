@@ -60,7 +60,7 @@ static func accuracy(player: Dictionary, distance: float, behind_arc: bool,
 	# Tuned against tools/shot_lab: an average shooter taking an average look
 	# lands near 0.50, which the accuracy-to-make curve turns into roughly 47%
 	# from the field and 40% from three.
-	var value := 0.10 + skill * 0.40 + release * 0.26
+	var value := 0.13 + skill * 0.40 + release * 0.26
 	value -= range_penalty + contest_penalty + movement_penalty + fatigue_penalty
 	# The difficulty dial moves the AI's edge, not the player's ceiling.
 	value -= float(difficulty) * 0.012

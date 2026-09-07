@@ -79,6 +79,13 @@ static func create(player: Dictionary, team: Dictionary, team_idx: int,
 	return pawn
 
 
+## Mixed with the match seed so a player does not make the same sequence of
+## misses in every single game. Seeding from the id alone made whole matches
+## replay identically.
+func set_random_seed(value: int) -> void:
+	_rng.seed = int(data["id"]) * 7919 + 13 + value
+
+
 func _setup(team: Dictionary, host: Node, with_meshes: bool) -> void:
 	_rng.seed = int(data["id"]) * 7919 + 13
 	_max_speed = 5.1 + float(data["spd"]) / 99.0 * 3.0

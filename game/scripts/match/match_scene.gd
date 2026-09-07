@@ -40,6 +40,7 @@ var events := {"out_of_bounds": 0, "shot_clock": 0, "possessions": 0,
 var team_fouls: Array[int] = [0, 0]
 
 var _free_throws := {}
+var _pending_foul := {}
 var _balance_run := false
 var _verbose := false
 
@@ -99,8 +100,15 @@ func _ready() -> void:
 
 func _fill_exhibition_setup() -> void:
 	var lg := Game.exhibition_league()
-	setup.home = lg["teams"][0]
-	setup.away = lg["teams"][16]
+	var teams: Array = lg["teams"]
+	# `--home` / `--away` let a balance run pick the matchup, which is how the
+	# home/away sides get compared with the rosters swapped.
+	var home_arg := FrameCapture.argument("--home")
+	var away_arg := FrameCapture.argument("--away")
+	var home_id := int(home_arg) if not home_arg.is_empty() else 0
+	var away_id := int(away_arg) if not away_arg.is_empty() else 16
+	setup.home = teams[posmod(home_id, teams.size())]
+	setup.away = teams[posmod(away_id, teams.size())]
 
 
 func _spawn_squads() -> void:
@@ -114,6 +122,7 @@ func _spawn_squads() -> void:
 				self, not _balance_run)
 			pawn.lineup_slot = slot
 			pawn.ball = ball
+			pawn.set_random_seed(_rng.randi())
 			add_child(pawn)
 			squads[team_index].append(pawn)
 			box.register(pawn.get_instance_id(), team_index, roster[slot])
@@ -391,12 +400,26 @@ func _score(basket: int, points: int) -> void:
 	if ctx.phase == MatchContext.Phase.FREE_THROW:
 		# The sequence decides what happens next, not the basket.
 		return
+	if not _pending_foul.is_empty():
+		var fouled: PlayerPawn = _pending_foul["fouled"]
+		_pending_foul.clear()
+		hud.announce("AND ONE", true)
+		Sound.react(0.9)
+		_begin_free_throws(fouled, 1)
+		return
 	hud.announce("%d PTS" % points, points == 3)
 	_dead_ball(1 - scoring_team, INBOUND_PAUSE)
 
 
 func _resolve_miss() -> void:
 	if _pending_shot.is_empty():
+		return
+	if not _pending_foul.is_empty():
+		var foul := _pending_foul
+		_pending_foul = {}
+		box.record_miss(int(_pending_shot["shooter"]), int(_pending_shot["points"]))
+		_pending_shot.clear()
+		_begin_free_throws(foul["fouled"], int(foul["attempts"]))
 		return
 	if _verbose:
 		print("  -> MISS  ball=(%.2f,%.2f,%.2f)" % [ball.global_position.x,
@@ -458,12 +481,16 @@ func _call_foul(offender: PlayerPawn, fouled: PlayerPawn, shot_free_throws: int)
 	Sound.play("whistle", -5.0)
 
 	var in_bonus: bool = team_fouls[team] > BONUS_FOULS
-	var attempts := shot_free_throws
-	if attempts == 0 and in_bonus:
-		attempts = 2
-	if attempts > 0:
-		hud.announce("FOUL", false)
-		_begin_free_throws(fouled, attempts)
+	if shot_free_throws > 0:
+		# The shot still counts. Whether it falls decides between an and-one
+		# and a full trip to the line, so the free throws wait for it.
+		hud.announce("SHOOTING FOUL", false)
+		_pending_foul = {"fouled": fouled, "attempts": shot_free_throws}
+		return
+	if in_bonus:
+		hud.announce("FOUL  BONUS", false)
+		_resolve_miss()
+		_begin_free_throws(fouled, 2)
 		return
 	hud.announce("FOUL  %d" % team_fouls[team], false)
 	_resolve_miss()
@@ -475,6 +502,7 @@ func _begin_free_throws(shooter: PlayerPawn, attempts: int) -> void:
 	clock.running = false
 	_phase_timer = 0.0
 	_pending_shot.clear()
+	_pending_foul.clear()
 	_free_throws = {
 		"shooter": shooter,
 		"remaining": attempts,

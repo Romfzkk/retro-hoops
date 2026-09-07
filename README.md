@@ -147,9 +147,11 @@ godot --headless --path game res://scenes/main_menu.tscn -- --net-host
 godot --headless --path game res://scenes/main_menu.tscn -- --net-join 127.0.0.1
 ```
 
-The sim probe is what the shooting balance was tuned against. A quarter
-currently runs around 46% from the field with roughly 16 assists and 7
-turnovers between the two teams.
+The sim probe is what the shooting balance was tuned against. A representative
+quarter runs 17-16, both sides around 39% from the field and 35% from three,
+with 11 assists, 7 turnovers, 10 team fouls and 20 possession changes between
+them. Field goal percentage sits a little under the real thing because the AI
+takes a longer average shot than a real offence does.
 
 ## Limitations
 
