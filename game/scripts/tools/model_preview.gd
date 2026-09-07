@@ -22,6 +22,7 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 	add_child(model)
+	_override_texture(model, FrameCapture.argument("--texture"))
 	_report(path, model)
 	_frame_camera(model)
 	FrameCapture.attach(self)
@@ -47,6 +48,28 @@ func _load_glb(path: String) -> Node3D:
 		push_error("%s is not readable as glTF: %s" % [path, error_string(err)])
 		return null
 	return doc.generate_scene(state) as Node3D
+
+
+# Swaps the albedo in, so a recoloured kit can be checked on the real model
+# before any of it is wired into the game.
+func _override_texture(root: Node3D, texture_path: String) -> void:
+	if texture_path.is_empty():
+		return
+	var image := Image.load_from_file(texture_path)
+	if image == null:
+		push_error("Could not read %s" % texture_path)
+		return
+	image.generate_mipmaps()
+	var texture := ImageTexture.create_from_image(image)
+	var meshes: Array[MeshInstance3D] = []
+	_collect(root, meshes)
+	for instance in meshes:
+		for surface in instance.mesh.get_surface_count():
+			var material := instance.mesh.surface_get_material(surface)
+			if material is BaseMaterial3D:
+				var copy: BaseMaterial3D = material.duplicate()
+				copy.albedo_texture = texture
+				instance.set_surface_override_material(surface, copy)
 
 
 func _report(path: String, root: Node3D) -> void:
