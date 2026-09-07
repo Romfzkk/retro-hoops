@@ -34,6 +34,9 @@ var _bones: Dictionary = {}
 var _skeleton: Skeleton3D
 var _detail := 1
 var _visible_body := true
+var _model_rest: Dictionary = {}
+var _model_frame: Dictionary = {}
+var _bind_fix: Dictionary = {}
 
 
 static func create(player: Dictionary, team: Dictionary, host: Node,
@@ -53,23 +56,103 @@ func _build(player: Dictionary, team: Dictionary, host: Node) -> void:
 	standing_reach = shoulder_height + body["upper_arm"] + body["forearm"] \
 		+ body["hand"]
 
-	_skeleton = Skeleton3D.new()
-	_skeleton.name = "Skeleton"
-	add_child(_skeleton)
-	_build_skeleton(body)
+	var model := ModelRig.instantiate(self, height) if _visible_body else null
+	if model != null:
+		_bind_model(model)
+		ModelRig.apply_kit(model, team, player, height)
+	else:
+		_skeleton = Skeleton3D.new()
+		_skeleton.name = "Skeleton"
+		add_child(_skeleton)
+		_build_skeleton(body)
 
 	for key in JOINTS:
 		pose[key] = Vector3.ZERO
 		_target_pose[key] = Vector3.ZERO
 
-	hand_l = _attach_to_bone("hand_l", "wrist_l",
-		Vector3(0.0, -body["hand"] * 0.5, 0.0))
-	hand_r = _attach_to_bone("hand_r", "wrist_r",
-		Vector3(0.0, -body["hand"] * 0.5, 0.0))
-	head_node = _attach_to_bone("head_anchor", "head", Vector3.ZERO)
+	if _model_rest.is_empty():
+		hand_l = _attach_to_bone("hand_l", "wrist_l",
+			Vector3(0.0, -body["hand"] * 0.5, 0.0))
+		hand_r = _attach_to_bone("hand_r", "wrist_r",
+			Vector3(0.0, -body["hand"] * 0.5, 0.0))
+		head_node = _attach_to_bone("head_anchor", "head", Vector3.ZERO)
+		if _visible_body:
+			_build_surfaces(player, team, host, body)
+	else:
+		hand_l = _attach_to_bone("hand_l", ModelRig.WRIST_BONES["l"], Vector3.ZERO)
+		hand_r = _attach_to_bone("hand_r", ModelRig.WRIST_BONES["r"], Vector3.ZERO)
+		head_node = _attach_to_bone("head_anchor", ModelRig.BONE_NAMES["head"],
+			Vector3.ZERO)
 
-	if _visible_body:
-		_build_surfaces(player, team, host, body)
+
+# Maps the animator's joints onto the model's own bones and records the bind
+# pose, which every pose rotation is then applied on top of.
+func _bind_model(model: Skeleton3D) -> void:
+	_skeleton = model
+	for key in JOINTS:
+		var index: int = model.find_bone(ModelRig.BONE_NAMES[key])
+		if index < 0:
+			push_error("Model is missing a bone for %s" % key)
+			continue
+		_bones[key] = index
+		_model_rest[key] = model.get_bone_rest(index).basis.get_rotation_quaternion()
+		# The animator thinks anatomically: +X pitches a limb forward whatever
+		# bone it is. Turning that into a local pose needs the parent's rest
+		# orientation in model space, because a bone's local transform is
+		# measured against its parent.
+		var parent := model.get_bone_parent(index)
+		var parent_basis := Basis.IDENTITY if parent < 0 			else model.get_bone_global_rest(parent).basis
+		_model_frame[key] = parent_basis.get_rotation_quaternion()
+		_bind_fix[key] = _rest_correction(model, index, key)
+	for tag in ModelRig.WRIST_BONES:
+		var index: int = model.find_bone(ModelRig.WRIST_BONES[tag])
+		if index >= 0:
+			_bones["wrist_%s" % tag] = index
+	_measure_reach(model)
+
+
+## Bones the animator treats as hanging down from their joint. Everything else
+## it treats as stacking upward.
+const HANGING := ["shoulder_l", "elbow_l", "shoulder_r", "elbow_r",
+	"hip_l", "knee_l", "hip_r", "knee_r"]
+
+
+# An authored model is bound in whatever pose the artist chose - this one is a
+# T-pose - while the animator writes rotations as if every limb started hanging
+# straight down. Without closing that gap, a zero rotation leaves the arms
+# stuck out sideways. This is the rotation from where the bone actually rests
+# to where the animator assumes it rests.
+func _rest_correction(model: Skeleton3D, index: int, key: String) -> Quaternion:
+	var child := -1
+	for candidate in model.get_bone_count():
+		if model.get_bone_parent(candidate) == index:
+			child = candidate
+			break
+	if child < 0:
+		return Quaternion.IDENTITY
+	var here := model.get_bone_global_rest(index).origin
+	var there := model.get_bone_global_rest(child).origin
+	var bind := (there - here)
+	if bind.length() < 0.00001:
+		return Quaternion.IDENTITY
+	bind = bind.normalized()
+	var wanted := Vector3.DOWN if HANGING.has(key) else Vector3.UP
+	if absf(bind.dot(wanted) + 1.0) < 0.0001:
+		return Quaternion(Vector3.RIGHT, PI)
+	return Quaternion(bind, wanted)
+
+
+func _measure_reach(model: Skeleton3D) -> void:
+	var scale_y: float = model.get_parent().scale.y if model.get_parent() != null else 1.0
+	var chest_index: int = _bones["chest"]
+	var chest := model.get_bone_global_pose(chest_index).origin.y * scale_y
+	var wrist_index: int = _bones.get("wrist_l", 0)
+	var wrist := model.get_bone_global_pose(wrist_index).origin
+	var shoulder_index: int = _bones["shoulder_l"]
+	var shoulder := model.get_bone_global_pose(shoulder_index).origin
+	var arm := shoulder.distance_to(wrist) * scale_y
+	shoulder_height = chest
+	standing_reach = chest + arm * 1.06
 
 
 # Everything the body is measured from. `bulk` is the one knob for body type:
@@ -578,6 +661,19 @@ func _materials(player: Dictionary, team: Dictionary) -> Dictionary:
 
 # --- posing ---------------------------------------------------------------
 
+# A generated skeleton rests axis aligned, so a pose rotation is the whole
+# transform. A model rests in its bind pose, so the same rotation has to be a
+# delta on top of it, expressed in that skeleton's own bone axes.
+func _write_joint(key: String, euler: Vector3) -> void:
+	var index := _bone(key)
+	var rotation := Quaternion.from_euler(euler)
+	if _model_rest.has(key):
+		var frame: Quaternion = _model_frame[key]
+		var model_space: Quaternion = rotation * (_bind_fix[key] as Quaternion)
+		rotation = (frame.inverse() * model_space * frame) 			* (_model_rest[key] as Quaternion)
+	_skeleton.set_bone_pose_rotation(index, rotation)
+
+
 func set_target(key: String, euler: Vector3) -> void:
 	_target_pose[key] = euler
 
@@ -587,15 +683,13 @@ func apply(delta: float, responsiveness: float = 18.0) -> void:
 	for key in JOINTS:
 		var blended: Vector3 = (pose[key] as Vector3).lerp(_target_pose[key], weight)
 		pose[key] = blended
-		_skeleton.set_bone_pose_rotation(_bone(key),
-			Quaternion.from_euler(blended))
+		_write_joint(key, blended)
 
 
 func snap_to_target() -> void:
 	for key in JOINTS:
 		pose[key] = _target_pose[key]
-		_skeleton.set_bone_pose_rotation(_bone(key),
-			Quaternion.from_euler(_target_pose[key]))
+		_write_joint(key, _target_pose[key])
 	if OS.is_stdout_verbose():
 		var idx := _bone("shoulder_l")
 		print("snap shoulder=%s elbow=%s wrist=%s" % [
