@@ -18,7 +18,7 @@ static func build(parent: Node3D, home: Dictionary, away: Dictionary,
 	rng.seed = seed_value
 
 	var court_viewport := CourtSurface.render_to_texture(parent, home, arena, seed_value)
-	_add_floor(parent, court_viewport.get_texture())
+	_bake_floor_mipmaps(_add_floor(parent, court_viewport.get_texture()), court_viewport)
 	if bool(arena.get("outdoor", false)):
 		_add_outdoor_surround(parent, arena)
 	else:
@@ -39,7 +39,7 @@ static func roof_height() -> float:
 	return TIER_RISE * TIER_COUNT + 10.0
 
 
-static func _add_floor(parent: Node3D, texture: Texture2D) -> void:
+static func _add_floor(parent: Node3D, texture: Texture2D) -> MeshInstance3D:
 	var mesh := MeshInstance3D.new()
 	mesh.name = "Floor"
 	var plane := PlaneMesh.new()
@@ -51,6 +51,26 @@ static func _add_floor(parent: Node3D, texture: Texture2D) -> void:
 	parent.add_child(mesh)
 
 	_add_floor_body(parent)
+	return mesh
+
+
+# A ViewportTexture carries no mip levels, so the floor material's request for
+# anisotropic mipmap filtering was quietly sampling level 0 everywhere. Grain
+# and lines are sub-pixel once the floor tilts away, which is why the court
+# boiled whenever the camera moved. Bake the render once it exists and hand the
+# material a texture that can actually be filtered.
+static func _bake_floor_mipmaps(mesh: MeshInstance3D, viewport: SubViewport) -> void:
+	await RenderingServer.frame_post_draw
+	if not is_instance_valid(mesh) or not is_instance_valid(viewport):
+		return
+	var image := viewport.get_texture().get_image()
+	if image == null:
+		push_warning("Court texture never rendered; floor stays unfiltered")
+		return
+	image.generate_mipmaps()
+	var material := mesh.material_override as StandardMaterial3D
+	material.albedo_texture = ImageTexture.create_from_image(image)
+	viewport.queue_free()
 
 
 static func _add_floor_body(parent: Node3D) -> void:
