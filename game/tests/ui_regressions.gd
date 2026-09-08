@@ -8,11 +8,37 @@ func _ready() -> void:
 	_input_edges()
 	_touch_holds()
 	_save_validation()
+	_screens_parse()
 	await _menu_layouts()
 	print("UI regressions: %d checks, %d failed" % [_checks, _failures.size()])
 	for failure in _failures:
 		push_error(failure)
 	get_tree().quit(1 if not _failures.is_empty() else 0)
+
+
+## Every screen script has to parse. One that does not still lets its scene
+## load, just with no script attached, so the screen comes up blank with
+## nothing failing anywhere - which is how a shadowed native class in the
+## season hub reached a build and left a grey screen on New Season.
+func _screens_parse() -> void:
+	var handle := DirAccess.open("res://scripts/ui")
+	if handle == null:
+		_check("screen scripts are readable", false)
+		return
+	handle.list_dir_begin()
+	var entry := handle.get_next()
+	while entry != "":
+		if entry.ends_with(".gd"):
+			var path := "res://scripts/ui".path_join(entry)
+			# A plain load hands back the cached object even when the script
+			# failed to compile, so it has to be re-parsed and then asked
+			# whether it is actually usable.
+			var script := ResourceLoader.load(path, "Script",
+				ResourceLoader.CACHE_MODE_REPLACE) as Script
+			_check("%s parses" % entry,
+				script != null and script.can_instantiate())
+		entry = handle.get_next()
+	handle.list_dir_end()
 
 
 func _check(label: String, condition: bool) -> void:

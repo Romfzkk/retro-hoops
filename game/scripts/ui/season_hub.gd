@@ -2,9 +2,11 @@ extends MenuScreen
 
 # Season home: next fixture, conference table, and the controls to play or sim.
 
-enum Panel { STANDINGS, SCHEDULE, BRACKET }
+## Named off Panel, which is a native class: shadowing it stops the whole
+## script parsing and the season screen loads with no script at all.
+enum View { STANDINGS, SCHEDULE, BRACKET }
 
-var _panel: Panel = Panel.STANDINGS
+var _panel: View = View.STANDINGS
 var _status := ""
 
 
@@ -36,14 +38,14 @@ func _refresh() -> void:
 		else:
 			subtitle = "Playoffs   %s" % League.round_name(playoffs,
 				int(playoffs["round"]))
-		_panel = Panel.BRACKET
+		_panel = View.BRACKET
 	else:
 		var day := int(Game.league["day"]) + 1
 		var total: int = (Game.league["schedule"] as Array).size()
 		subtitle = "Season %d   Day %d of %d   %d-%d" % [int(Game.league["season"]),
 			mini(day, total), total, int(team["w"]), int(team["l"])]
-		if _panel == Panel.BRACKET:
-			_panel = Panel.STANDINGS
+		if _panel == View.BRACKET:
+			_panel = View.STANDINGS
 
 	var fixture := _next_user_game()
 	var playable := not fixture.is_empty() and not bool(fixture.get("played", false))
@@ -60,9 +62,9 @@ func _refresh() -> void:
 
 func _panel_name() -> String:
 	match _panel:
-		Panel.SCHEDULE:
+		View.SCHEDULE:
 			return "SCHEDULE"
-		Panel.BRACKET:
+		View.BRACKET:
 			return "BRACKET"
 	return "STANDINGS"
 
@@ -108,9 +110,9 @@ func _next_user_game() -> Dictionary:
 func on_adjust(id: String, step: int) -> void:
 	if id != "panel":
 		return
-	var available: Array[Panel] = [Panel.STANDINGS, Panel.SCHEDULE]
+	var available: Array[View] = [View.STANDINGS, View.SCHEDULE]
 	if _in_playoffs():
-		available.append(Panel.BRACKET)
+		available.append(View.BRACKET)
 	var index := maxi(available.find(_panel), 0)
 	_panel = available[wrapi(index + step, 0, available.size())]
 	_refresh()
@@ -217,11 +219,11 @@ func _draw_side_panel(scale: float) -> void:
 	var rect := detail_rect(scale)
 	UiTheme.panel(self, rect, UiTheme.SURFACE, 0.78)
 	match _panel:
-		Panel.STANDINGS:
+		View.STANDINGS:
 			_draw_standings(rect, scale)
-		Panel.SCHEDULE:
+		View.SCHEDULE:
 			_draw_schedule(rect, scale)
-		Panel.BRACKET:
+		View.BRACKET:
 			_draw_bracket(rect, scale)
 	if not _status.is_empty():
 		UiTheme.label(self, _status,
