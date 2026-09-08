@@ -158,17 +158,25 @@ func _running_arms(gait: float) -> void:
 
 
 func _dribble_arms(gait: float) -> void:
-	var pump := absf(sin(dribble_phase)) * 2.0 - 1.0
+	# The hand rides the same curve as the ball: `dribble_phase` is what places
+	# the ball, so reading it here keeps the two together. The arm used to pump
+	# through about a radian at the elbow and never left the hip, so the ball
+	# went to the floor on its own and came back to nobody.
+	var bounce := absf(sin(dribble_phase))
+	var reach := 1.0 - bounce
 	var off_hand := -ball_hand
 	var ball_tag := "l" if ball_hand > 0.0 else "r"
 	var free_tag := "l" if off_hand > 0.0 else "r"
-	rig.set_target("shoulder_%s" % ball_tag,
-		Vector3(0.42 + pump * 0.30, 0.0, rig.lateral_side(ball_hand) * 0.30))
-	rig.set_target("elbow_%s" % ball_tag, Vector3(0.85 + pump * 0.45, 0.0, 0.0))
-	# Off arm shields the ball.
-	rig.set_target("shoulder_%s" % free_tag,
-		Vector3(0.55, 0.0, rig.lateral_side(off_hand) * (0.55 + gait * 0.2)))
-	rig.set_target("elbow_%s" % free_tag, Vector3(1.25, 0.0, 0.0))
+	rig.set_target("shoulder_%s" % ball_tag, Vector3(lerpf(0.58, 0.08, reach),
+		0.0, rig.lateral_side(ball_hand) * 0.26))
+	rig.set_target("elbow_%s" % ball_tag,
+		Vector3(lerpf(1.60, 0.14, reach), 0.0, 0.0))
+	# Off arm shields, and swings a little with the stride so it is not a prop.
+	var swing := sin(stride_phase) * 0.20 * gait
+	rig.set_target("shoulder_%s" % free_tag, Vector3(0.46 + swing, 0.0,
+		rig.lateral_side(off_hand) * (0.60 + gait * 0.18)))
+	rig.set_target("elbow_%s" % free_tag,
+		Vector3(1.18 - swing * 0.5, 0.0, 0.0))
 
 
 func _shoot_arms() -> void:

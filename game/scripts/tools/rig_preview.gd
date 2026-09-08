@@ -7,7 +7,10 @@ extends Node3D
 const POSES := [
 	{"label": "idle", "action": PlayerAnimator.Action.NONE, "speed": 0.0, "ball": false},
 	{"label": "run", "action": PlayerAnimator.Action.NONE, "speed": 6.4, "ball": false},
-	{"label": "dribble", "action": PlayerAnimator.Action.NONE, "speed": 3.2, "ball": true},
+	{"label": "dribble high", "action": PlayerAnimator.Action.NONE, "speed": 3.2,
+		"ball": true, "dribble_phase": PI * 0.5},
+	{"label": "dribble low", "action": PlayerAnimator.Action.NONE, "speed": 3.2,
+		"ball": true, "dribble_phase": PI},
 	{"label": "shoot", "action": PlayerAnimator.Action.SHOOT, "speed": 0.0, "ball": true,
 		"t": 0.75, "air": true},
 	{"label": "dunk", "action": PlayerAnimator.Action.DUNK, "speed": 0.0, "ball": true,
@@ -67,6 +70,8 @@ func _ready() -> void:
 		animator.action_t = float(pose.get("t", 0.0))
 		animator.grounded = not bool(pose.get("air", false))
 		animator.defending = bool(pose.get("defend", false))
+		animator.dribble_driven = pose.has("dribble_phase")
+		animator.dribble_phase = float(pose.get("dribble_phase", 1.1))
 		animator.gather = float(pose.get("gather", 0.0))
 		animator.airborne = float(pose.get("airborne", 0.0))
 		animator.stride_phase = 1.1
@@ -80,7 +85,9 @@ func _ready() -> void:
 		camera.rotation_degrees = Vector3(-4.0, 0.0, 0.0)
 		camera.fov = 32.0
 	else:
-		camera.position = Vector3(0.0, 1.7, 6.2)
+		# Back off with the lineup so adding a pose does not push the ends of
+		# the row out of frame.
+		camera.position = Vector3(0.0, 1.7, 3.0 + float(POSES.size()) * 0.72)
 		camera.rotation_degrees = Vector3(-5.0, 0.0, 0.0)
 		camera.fov = 50.0
 	camera.current = true
