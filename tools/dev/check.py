@@ -24,7 +24,8 @@ def main():
     if not shutil.which(GODOT):
         sys.exit("Godot is missing. Install 4.7.2 standard and set GODOT_BIN to its executable.")
     for args in [["--import"], ["res://scenes/self_test.tscn"],
-                 ["res://scenes/match_regressions.tscn"]]:
+                 ["res://scenes/match_regressions.tscn"], ["res://scenes/rig_regressions.tscn"],
+                 ["res://scenes/ui_regressions.tscn"]]:
         run(args)
 
 

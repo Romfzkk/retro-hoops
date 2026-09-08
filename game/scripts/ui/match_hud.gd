@@ -70,6 +70,7 @@ func _ready() -> void:
 	_stamina.add_theme_stylebox_override("fill", fill)
 	add_child(_stamina)
 	_pause = UiTheme.button("PAUSE")
+	_pause.focus_mode = Control.FOCUS_NONE
 	_pause.pressed.connect(func(): pause_requested.emit())
 	add_child(_pause)
 	_final_panel = PanelContainer.new()
@@ -93,6 +94,8 @@ func _label(parent: Node, font: Font) -> Label:
 	result.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	result.add_theme_font_override("font", font)
 	result.add_theme_color_override("font_color", UiTheme.TEXT)
+	result.add_theme_color_override("font_outline_color", UiTheme.INK)
+	result.add_theme_constant_override("outline_size", 3)
 	result.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	result.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(result)

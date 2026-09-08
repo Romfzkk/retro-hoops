@@ -22,9 +22,6 @@ jobs:
           mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
           chmod +x /usr/local/bin/godot
 
-      - name: Import project
-        run: godot --headless --path game --import
-
       - name: Run checks
         run: python3 tools/dev/check.py
 

@@ -180,8 +180,8 @@ func _rebuild_rows(scale: float) -> void:
 	_rows_hash = hash(rows)
 	_last_scale = scale
 	selected = clampi(selected, 0, maxi(rows.size() - 1, 0))
-	var had_focus := _scroll.is_ancestor_of(get_viewport().gui_get_focus_owner()) \
-		if get_viewport().gui_get_focus_owner() != null else true
+	var focus := get_viewport().gui_get_focus_owner()
+	var had_focus := _buttons.is_empty() or focus == null or _scroll.is_ancestor_of(focus)
 	for child in _list.get_children():
 		_list.remove_child(child)
 		child.queue_free()

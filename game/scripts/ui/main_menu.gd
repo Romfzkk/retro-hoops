@@ -40,7 +40,6 @@ func _ready() -> void:
 	layer.add_child(_menu)
 	add_child(layer)
 
-	FrameCapture.attach(self)
 
 
 func _build_rows() -> Array[Dictionary]:
