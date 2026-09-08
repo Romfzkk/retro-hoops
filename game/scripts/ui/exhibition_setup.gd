@@ -12,6 +12,7 @@ var _arena := 0
 var _quarters := 4
 var _quarter_minutes := 5
 var _opponent_is_human := false
+var _rosters: Array[Tree] = []
 
 
 func _ready() -> void:
@@ -26,6 +27,7 @@ func _ready() -> void:
 	footer = "Change  A/D    Select  Enter    Back  Esc"
 	chosen.connect(_on_chosen)
 	cancelled.connect(func(): Game.goto("res://scenes/main_menu.tscn"))
+	_build_roster_tables()
 	_refresh()
 
 
@@ -39,9 +41,11 @@ func _refresh() -> void:
 		{"id": "quarters", "label": "PERIODS", "value": str(_quarters)},
 		{"id": "length", "label": "MINUTES", "value": str(_quarter_minutes)},
 		{"id": "opponent", "label": "OPPONENT",
-			"value": "PLAYER 2" if _opponent_is_human else "CPU"},
+			"value": "PAD 2" if _opponent_is_human else "CPU",
+			"hint": "Player one: keyboard or first pad. Player two: second pad."},
 		{"id": "tip", "label": "TIP OFF"},
 	]
+	_populate_rosters()
 
 
 func _team_label(index: int) -> String:
@@ -92,45 +96,63 @@ func _on_chosen(id: String) -> void:
 	Game.goto("res://scenes/match.tscn")
 
 
+func _build_roster_tables() -> void:
+	for index in 2:
+		var table := Tree.new()
+		table.hide_root = true
+		table.columns = 3
+		table.column_titles_visible = true
+		table.set_column_title(0, "PLAYER")
+		table.set_column_title(1, "POS")
+		table.set_column_title(2, "OVR")
+		table.set_column_custom_minimum_width(0, 150)
+		for column in [1, 2]:
+			table.set_column_custom_minimum_width(column, 42)
+			table.set_column_expand(column, false)
+		table.add_theme_font_override("font", UiTheme.text_font())
+		table.add_theme_font_override("title_button_font", UiTheme.bold_font())
+		table.add_theme_color_override("font_color", UiTheme.TEXT)
+		table.add_theme_constant_override("v_separation", 12)
+		add_child(table)
+		_rosters.append(table)
+
+
+func _populate_rosters() -> void:
+	for index in _rosters.size():
+		var table := _rosters[index]
+		var team: Dictionary = _teams[_home if index == 0 else _away]
+		table.clear()
+		var root := table.create_item()
+		for player: Dictionary in team["roster"]:
+			var item := table.create_item(root)
+			item.set_text(0, "#%d  %s" % [player["num"], League.short_name(player)])
+			item.set_text(1, League.POS_NAMES[int(player["pos"])])
+			item.set_text(2, str(player["ovr"]))
+			for column in 3:
+				item.set_selectable(column, false)
+
+
+func _process(delta: float) -> void:
+	super(delta)
+	var scale := UiTheme.scale_for(view())
+	var rect := detail_rect(scale)
+	var gap := 16.0 * scale
+	for index in _rosters.size():
+		var table := _rosters[index]
+		table.visible = _wide_details(scale) or _show_details
+		table.position = rect.position + Vector2((rect.size.x + gap) * 0.5 * index, 44.0 * scale)
+		table.size = Vector2((rect.size.x - gap) * 0.5, maxf(80.0, rect.size.y - 44.0 * scale))
+		table.add_theme_font_size_override("font_size", UiTheme.size(UiTheme.LABEL, scale))
+		table.add_theme_font_size_override("title_button_font_size", UiTheme.size(UiTheme.LABEL, scale))
+
+
 func _draw_side_panel(scale: float) -> void:
 	var rect := detail_rect(scale)
-	UiTheme.panel(self, rect, UiTheme.SURFACE, 0.78)
-	var half := rect.size.x * 0.5
-	_draw_roster(Rect2(rect.position, Vector2(half, rect.size.y)), _teams[_home], scale)
-	_draw_roster(Rect2(Vector2(rect.position.x + half, rect.position.y),
-		Vector2(half, rect.size.y)), _teams[_away], scale)
-	draw_line(Vector2(rect.position.x + half, rect.position.y + UiTheme.L * scale),
-		Vector2(rect.position.x + half, rect.end.y - UiTheme.L * scale),
-		UiTheme.LINE, UiTheme.HAIRLINE)
-
-
-func _draw_roster(rect: Rect2, team: Dictionary, scale: float) -> void:
-	var pad := UiTheme.XL * scale
-	var x := rect.position.x + pad
-	draw_rect(Rect2(Vector2(x, rect.position.y + pad),
-		Vector2(rect.size.x - pad * 2.0, 5.0 * scale)), Color(team["primary"]))
-
-	UiTheme.label(self, League.team_full(team).to_upper(),
-		Vector2(x, rect.position.y + 52.0 * scale), UiTheme.display_font(),
-		UiTheme.size(UiTheme.SUB, scale), UiTheme.TEXT)
-	UiTheme.label(self, "%s CONFERENCE" % Teams.conference_name(int(team["conf"])).to_upper(),
-		Vector2(x, rect.position.y + 74.0 * scale), UiTheme.text_font(),
-		UiTheme.size(UiTheme.MICRO, scale), UiTheme.TEXT_DIM)
-
-	var roster: Array = team["roster"]
-	var count := mini(roster.size(), 8)
-	for i in count:
-		var player: Dictionary = roster[i]
-		var y := rect.position.y + (108.0 + float(i) * 26.0) * scale
-		UiTheme.label(self, "%2d" % int(player["num"]), Vector2(x, y),
-			UiTheme.text_font(), UiTheme.size(UiTheme.LABEL, scale), UiTheme.TEXT_DIM)
-		UiTheme.label(self, League.short_name(player),
-			Vector2(x + 34.0 * scale, y), UiTheme.text_font(),
-			UiTheme.size(UiTheme.LABEL, scale), UiTheme.TEXT)
-		UiTheme.label(self, League.POS_NAMES[int(player["pos"])],
-			Vector2(x + 168.0 * scale, y), UiTheme.text_font(),
-			UiTheme.size(UiTheme.MICRO, scale), UiTheme.TEXT_DIM)
-		UiTheme.label_right(self, str(int(player["ovr"])),
-			rect.end.x - pad, y, UiTheme.bold_font(),
-			UiTheme.size(UiTheme.LABEL, scale),
-			UiTheme.GOLD if i < 5 else UiTheme.TEXT_DIM)
+	for index in 2:
+		var team: Dictionary = _teams[_home if index == 0 else _away]
+		var at := rect.position + Vector2((rect.size.x + 16.0 * scale) * 0.5 * index, 0.0)
+		var width := (rect.size.x - 16.0 * scale) * 0.5
+		draw_rect(Rect2(at, Vector2(width, 3.0)), Color(team["primary"]))
+		draw_string(UiTheme.display_font(), at + Vector2(0.0, 30.0 * scale),
+			League.team_full(team).to_upper(), HORIZONTAL_ALIGNMENT_LEFT, width,
+			UiTheme.size(UiTheme.SUB, scale), UiTheme.TEXT)

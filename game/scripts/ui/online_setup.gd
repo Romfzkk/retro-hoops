@@ -14,6 +14,7 @@ var _address := "127.0.0.1"
 var _status := ""
 var _address_field: LineEdit
 var _refresh := 0.0
+var _connection_help: Label
 
 
 func _ready() -> void:
@@ -31,6 +32,11 @@ func _ready() -> void:
 	Net.peer_left.connect(func(_id): _status = "Opponent left.")
 	Net.connected_to_host.connect(func(): _status = "Connected. Waiting for tip off.")
 
+	_connection_help = Label.new()
+	_connection_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_connection_help.add_theme_font_override("font", UiTheme.text_font())
+	_connection_help.add_theme_color_override("font_color", UiTheme.TEXT)
+	add_child(_connection_help)
 	_build_address_field()
 	Net.start_browsing()
 	_refresh_rows()
@@ -151,47 +157,23 @@ func _leave() -> void:
 
 func _position_address_field() -> void:
 	var scale := UiTheme.scale_for(view())
-	_address_field.visible = not _hosting
-	if _hosting:
-		return
+	var details_visible := _wide_details(scale) or _show_details
 	var rect := detail_rect(scale)
-	_address_field.position = Vector2(rect.position.x + UiTheme.XL * scale,
-		rect.end.y - 96.0 * scale)
-	_address_field.size = Vector2(rect.size.x - UiTheme.XL * scale * 2.0, 40.0 * scale)
-	_address_field.add_theme_font_size_override("font_size",
-		UiTheme.size(UiTheme.BODY, scale))
-
-
-func _draw_side_panel(scale: float) -> void:
-	var rect := detail_rect(scale)
-	UiTheme.panel(self, rect, UiTheme.SURFACE, 0.80)
-	var pad := UiTheme.XL * scale
-	var y := rect.position.y + 48.0 * scale
-
-	UiTheme.label(self, "HOW IT WORKS", Vector2(rect.position.x + pad, y),
-		UiTheme.display_font(), UiTheme.size(UiTheme.SUB, scale), UiTheme.TEXT)
-	y += 34.0 * scale
-
-	var lines := [
-		"The host runs the game. Physics, the AI on the other three players and",
-		"every rule call happen on that machine, and the visitor's controller",
-		"input is sent up to it. That way both of you are watching one game",
-		"instead of two that drift apart.",
-		"",
-		"On the same network the host shows up in the list on its own.",
-		"Across the internet the host needs port %d forwarded." % Net.DEFAULT_PORT,
-	]
-	for line in lines:
-		UiTheme.label(self, line, Vector2(rect.position.x + pad, y),
-			UiTheme.text_font(), UiTheme.size(UiTheme.BODY, scale), UiTheme.TEXT_DIM)
-		y += 26.0 * scale
-
-	if not _hosting:
-		UiTheme.label(self, "ADDRESS", Vector2(rect.position.x + pad,
-			rect.end.y - 108.0 * scale), UiTheme.bold_font(),
-			UiTheme.size(UiTheme.MICRO, scale), UiTheme.TEXT_DIM)
-
+	var pad := 20.0 * scale
+	_address_field.visible = not _hosting and details_visible
+	_address_field.position = rect.position + Vector2(pad, rect.size.y - 60.0 * scale)
+	_address_field.size = Vector2(rect.size.x - pad * 2.0, 46.0 * scale)
+	_address_field.add_theme_font_size_override("font_size", UiTheme.size(UiTheme.BODY, scale))
+	_connection_help.visible = details_visible
+	_connection_help.position = rect.position + Vector2(pad, pad)
+	_connection_help.size = Vector2(rect.size.x - pad * 2.0, maxf(60.0, rect.size.y - 100.0 * scale))
+	_connection_help.add_theme_font_size_override("font_size", UiTheme.size(UiTheme.BODY, scale))
+	_connection_help.text = "Host: open a lobby, then choose Tip Off when your opponent connects.\n\nJoin: select a nearby lobby or enter the host's address below. Internet games require the host to forward UDP port %d." % Net.DEFAULT_PORT
+	if not _hosting and Net.lobbies().is_empty() and not Net.is_online():
+		_connection_help.text += "\n\nNo nearby lobbies found."
 	if not _status.is_empty():
-		UiTheme.label(self, _status,
-			Vector2(rect.position.x + pad, rect.end.y - 24.0 * scale),
-			UiTheme.text_font(), UiTheme.size(UiTheme.LABEL, scale), UiTheme.GOLD)
+		_connection_help.text += "\n\n" + _status
+
+
+func _draw_side_panel(_scale: float) -> void:
+	pass

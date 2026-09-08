@@ -1,19 +1,12 @@
 class_name UiTheme
 extends RefCounted
 
-# The whole interface is drawn in code, so the design system lives here rather
-# than in a .tres: one palette, one type scale, one spacing ramp.
-#
-# Direction is broadcast graphics - hard-edged blocks, condensed display type,
-# tabular numbers, colour used for state rather than decoration. Surfaces are
-# dark because the UI sits over a brightly lit court and has to stay readable
-# without dimming the game.
+# Shared fonts, palette, spacing and native control styles.
 
 const DISPLAY_FONT := "res://assets/fonts/BebasNeue-Regular.ttf"
 const TEXT_FONT := "res://assets/fonts/Barlow-Regular.ttf"
 const TEXT_FONT_BOLD := "res://assets/fonts/Barlow-SemiBold.ttf"
 
-# --- palette --------------------------------------------------------------
 const INK := Color("#0a0d13")
 const SURFACE := Color("#141922")
 const SURFACE_HI := Color("#1e2531")
@@ -26,9 +19,6 @@ const GREEN := Color("#37d67a")
 const RED := Color("#ff4d4f")
 const BLUE := Color("#4c9aff")
 
-# --- type scale -----------------------------------------------------------
-# Authored against a 1080p-tall viewport and scaled from there.
-const REFERENCE_HEIGHT := 1080.0
 const DISPLAY := 72
 const TITLE := 44
 const HEAD := 30
@@ -37,7 +27,6 @@ const BODY := 17
 const LABEL := 14
 const MICRO := 12
 
-# --- spacing --------------------------------------------------------------
 const XS := 4
 const S := 8
 const M := 12
@@ -74,14 +63,14 @@ static func bold_font() -> Font:
 
 ## Multiplier that keeps the layout proportional on any window size.
 static func scale_for(viewport_size: Vector2) -> float:
-	return clampf(viewport_size.y / REFERENCE_HEIGHT, 0.62, 1.9)
+	return clampf(minf(viewport_size.y / 850.0, viewport_size.x / 1280.0), 0.78, 1.9)
 
 
 static func size(base: int, scale: float) -> int:
-	return int(round(float(base) * scale))
+	var minimum := 14 if base <= LABEL else 16
+	return maxi(minimum, int(round(float(base) * scale)))
 
 
-# --- drawing helpers ------------------------------------------------------
 
 ## Flat block with a hairline edge. No rounded corners anywhere: the hard edge
 ## is what makes it read as a broadcast graphic rather than a phone app.
@@ -91,16 +80,6 @@ static func panel(canvas: CanvasItem, rect: Rect2, fill: Color = SURFACE,
 	body.a = opacity
 	canvas.draw_rect(rect, body)
 	canvas.draw_rect(rect, LINE, false, HAIRLINE)
-
-
-static func accent_edge(canvas: CanvasItem, rect: Rect2, colour: Color,
-		thickness: float = ACCENT_BAR) -> void:
-	canvas.draw_rect(Rect2(rect.position.x, rect.end.y - thickness,
-		rect.size.x, thickness), colour)
-
-
-static func team_chip(canvas: CanvasItem, rect: Rect2, colour: Color) -> void:
-	canvas.draw_rect(rect, colour)
 
 
 static func label(canvas: CanvasItem, text: String, at: Vector2, font: Font,
@@ -129,3 +108,27 @@ static func text_width(text: String, font: Font, font_size: int) -> float:
 ## Readable ink for text sitting on an arbitrary team colour.
 static func on_colour(background: Color) -> Color:
 	return INK if background.get_luminance() > 0.55 else TEXT
+
+
+static func button(text: String, scale: float = 1.0) -> Button:
+	var result := Button.new()
+	result.text = text
+	result.add_theme_font_override("font", display_font())
+	result.add_theme_font_size_override("font_size", size(HEAD, scale))
+	result.add_theme_color_override("font_color", TEXT)
+	result.add_theme_color_override("font_hover_color", TEXT)
+	result.add_theme_color_override("font_focus_color", TEXT)
+	result.add_theme_color_override("font_disabled_color", TEXT_DIM)
+	for state in ["normal", "hover", "pressed", "focus", "disabled"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = SURFACE_HI if state in ["hover", "pressed"] else Color(INK, 0.25)
+		style.border_color = ORANGE if state == "focus" else LINE
+		style.border_width_bottom = 2 if state == "focus" else 1
+		style.content_margin_left = 12.0 * scale
+		style.content_margin_right = 12.0 * scale
+		style.content_margin_top = 6.0 * scale
+		style.content_margin_bottom = 6.0 * scale
+		if state == "focus":
+			style.bg_color = Color.TRANSPARENT
+		result.add_theme_stylebox_override(state, style)
+	return result

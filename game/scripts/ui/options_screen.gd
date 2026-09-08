@@ -1,16 +1,11 @@
 extends MenuScreen
 
 const CAMERA_NAMES := ["BROADCAST", "BEHIND", "HIGH", "COURTSIDE", "BASELINE"]
-const SHOT_STYLE_NAMES := ["HYBRID", "TIMING", "POWER", "AUTO"]
+const SHOT_STYLE_NAMES := ["TIMING", "ASSISTED"]
+const SHOT_STYLES := [Settings.ShotStyle.HYBRID, Settings.ShotStyle.AUTO]
 const DIFFICULTY_NAMES := ["ROOKIE", "PRO", "ALL-STAR", "LEGEND"]
 const TOUCH_NAMES := ["AUTO", "ALWAYS", "NEVER"]
 
-const SHOT_STYLE_HELP := {
-	0: "Hold to charge, release inside the green window. Power and timing both count.",
-	1: "The meter fills on its own. Tap to stop it in the green.",
-	2: "Release height sets the shot. No timing window.",
-	3: "The shot resolves on ratings alone. No meter.",
-}
 
 
 func _ready() -> void:
@@ -28,7 +23,7 @@ func _refresh() -> void:
 		{"id": "camera", "label": "CAMERA",
 			"value": CAMERA_NAMES[int(Settings.get_value("camera_mode"))]},
 		{"id": "shot_style", "label": "SHOT STYLE",
-			"value": SHOT_STYLE_NAMES[int(Settings.get_value("shot_style"))]},
+			"value": SHOT_STYLE_NAMES[1 if int(Settings.get_value("shot_style")) == Settings.ShotStyle.AUTO else 0]},
 		{"id": "meter", "label": "SHOT METER",
 			"value": _on_off(Settings.get_value("shot_meter_visible"))},
 		{"id": "difficulty", "label": "DIFFICULTY",
@@ -53,7 +48,8 @@ func on_adjust(id: String, step: int) -> void:
 		"camera":
 			_cycle("camera_mode", step, CAMERA_NAMES.size())
 		"shot_style":
-			_cycle("shot_style", step, SHOT_STYLE_NAMES.size())
+			var current := 1 if int(Settings.get_value("shot_style")) == Settings.ShotStyle.AUTO else 0
+			Settings.set_value("shot_style", SHOT_STYLES[wrapi(current + step, 0, 2)])
 		"meter":
 			Settings.set_value("shot_meter_visible", not Settings.get_value("shot_meter_visible"))
 		"difficulty":
@@ -117,11 +113,11 @@ func _draw_side_panel(scale: float) -> void:
 func _help_for(id: String) -> String:
 	match id:
 		"shot_style":
-			return SHOT_STYLE_HELP[int(Settings.get_value("shot_style"))]
+			return "Timing: hold to gather, then release in the green window. Assisted: ratings set release quality. Close finishes use positioning and reach."
 		"camera":
 			return "Broadcast follows the ball from the sideline. Behind sits over the shoulder of the player you control."
 		"difficulty":
-			return "Raises the CPU decision quality. It does not lower your own shooting."
+			return "Raises CPU pressure and makes shooting less forgiving for both teams."
 		"touch":
 			return "Auto shows the on-screen stick only on phones and tablets."
 		"shadows":
