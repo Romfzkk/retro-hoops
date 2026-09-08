@@ -23,6 +23,11 @@ func _ready() -> void:
 	var model_path := FrameCapture.argument("--player-model")
 	if not model_path.is_empty():
 		ModelRig.preview_asset(model_path)
+	var selected_pose := FrameCapture.argument("--pose")
+	if not selected_pose.is_empty() and not POSES.any(func(pose): return pose["label"] == selected_pose):
+		push_error("Unknown pose. Use idle, run, dribble, shoot, dunk or defend.")
+		get_tree().quit(1)
+		return
 	var lg := League.new_league(11)
 	var team: Dictionary = lg["teams"][7]
 
@@ -31,7 +36,6 @@ func _ready() -> void:
 
 	for i in POSES.size():
 		var pose: Dictionary = POSES[i]
-		var selected_pose := FrameCapture.argument("--pose")
 		if not selected_pose.is_empty() and pose["label"] != selected_pose:
 			continue
 		var player: Dictionary = team["roster"][0]
@@ -47,6 +51,10 @@ func _ready() -> void:
 
 		var rig := PlayerRig.create(player, team, self)
 		holder.add_child(rig)
+		if rig._retarget == null:
+			push_error("The imported player was rejected. Inspect the preceding asset errors.")
+			get_tree().quit(1)
+			return
 		var animator := PlayerAnimator.new(rig)
 		animator.speed = float(pose["speed"])
 		animator.top_speed = 7.4

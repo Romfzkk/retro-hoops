@@ -128,17 +128,29 @@ static func instantiate(parent: Node3D, height: float) -> Skeleton3D:
 
 static func validate(root: Node3D, skeleton: Skeleton3D) -> PackedStringArray:
 	var problems := PackedStringArray()
-	for bone_name in BONE_NAMES.values() + WRIST_BONES.values():
+	var names := BONE_NAMES.duplicate()
+	names["wrist_l"] = WRIST_BONES["l"]
+	names["wrist_r"] = WRIST_BONES["r"]
+	for bone_name in names.values():
 		if skeleton.find_bone(bone_name) < 0:
 			problems.append("missing bone " + bone_name)
+	for index in skeleton.get_bone_count():
+		var rest := skeleton.get_bone_rest(index)
+		if not _rotation_space_supported(rest):
+			problems.append("bake nonuniform scale or reflection on " + skeleton.get_bone_name(index))
+	if not _rotation_space_supported(root.transform * relative_transform(skeleton, root)):
+		problems.append("bake nonuniform scale or reflection above the skeleton")
 	var chains := {
 		"elbow_l": "shoulder_l", "elbow_r": "shoulder_r",
 		"knee_l": "hip_l", "knee_r": "hip_r",
 		"ankle_l": "knee_l", "ankle_r": "knee_r",
+		"wrist_l": "elbow_l", "wrist_r": "elbow_r",
+		"hip_l": "hips", "hip_r": "hips", "spine": "hips",
+		"chest": "spine", "head": "chest",
 	}
 	for child_key in chains:
-		var child := skeleton.find_bone(BONE_NAMES[child_key])
-		var parent := skeleton.find_bone(BONE_NAMES[chains[child_key]])
+		var child := skeleton.find_bone(names[child_key])
+		var parent := skeleton.find_bone(names[chains[child_key]])
 		if child >= 0 and parent >= 0:
 			var cursor := skeleton.get_bone_parent(child)
 			while cursor >= 0 and cursor != parent:
@@ -156,6 +168,13 @@ static func validate(root: Node3D, skeleton: Skeleton3D) -> PackedStringArray:
 	if not skinned:
 		problems.append("no skinned mesh surfaces")
 	return problems
+
+
+static func _rotation_space_supported(transform: Transform3D) -> bool:
+	if not transform.is_finite() or transform.basis.determinant() <= 0.0:
+		return false
+	var scale := transform.basis.get_scale()
+	return is_equal_approx(scale.x, scale.y) and is_equal_approx(scale.y, scale.z)
 
 
 static func relative_transform(node: Node3D, ancestor: Node3D) -> Transform3D:

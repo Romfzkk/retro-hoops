@@ -19,6 +19,7 @@ var _to_rig: Basis
 
 func _init(skeleton: Skeleton3D, bones: Dictionary, to_rig: Transform3D) -> void:
 	_skeleton = skeleton
+	skeleton.reset_bone_poses()
 	_bones = bones
 	_to_rig = to_rig.basis.orthonormalized()
 	for root in skeleton.get_parentless_bones():
