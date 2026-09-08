@@ -65,8 +65,10 @@ rewrite a league already in progress.
 A replaced roster shorter than 12 players is topped up with generated
 players, so a two-man pack still leaves a team that can take the floor.
 
-`primary` is the jersey, `secondary` is the trim, numbers and shoes, and
-`accent` tints the shorts and the court apron.
+Team colours affect the court and the bundled player texture mask. The current
+FBX does not have separate clothing or hair meshes. `hair` remains roster data
+for the legacy fallback and does not change the imported character. Skin and
+clothing tinting depend on the bundled texture mask.
 
 ### Player fields
 
@@ -87,22 +89,23 @@ players, so a two-man pack still leaves a team that can take the floor.
 | Key | Drives |
 |---|---|
 | `spd` `acc` | top speed and acceleration, in metres per second |
-| `str` | holding position, and how thickly the player is built |
-| `vrt` | vertical leap in metres — this is what decides who can dunk |
+| `str` | player separation; body proportions in the legacy fallback |
+| `vrt` | vertical leap in metres , this is what decides who can dunk |
 | `thr` `mid` `cls` | shooting from three, mid-range and close |
-| `dnk` `lay` | finishing at the rim |
+| `dnk` | dunk approach power |
+| `lay` | stored in rosters; no separate layup calculation yet |
 | `pas` `hnd` | passing and ball security |
-| `stl` `blk` `reb` `def` | defence |
+| `stl` `blk` `def` | steals, blocks and foul risk |
+| `reb` | stored in rosters; catches currently use reach and positioning |
 | `sta` | stamina drain and recovery |
 
-Ratings are real quantities, not opinions. A player with `vrt` of 40 cannot get
-a hand over the rim regardless of everything else, and a 7-footer with a low
-`spd` will be beaten down the floor.
+Height and vertical combine to determine reach. Speed sets running pace.
+Not every stored rating currently has a separate gameplay effect.
 
 ## Validation
 
 A pack is checked before anything is applied, and rejected as a whole if
-anything is wrong — a bad file can never half-apply and leave your league in a
+anything is wrong , a bad file can never half-apply and leave your league in a
 strange state. Rejections are written to the Godot log with the reason.
 
 Checked: the format version, that `teams` is a non-empty array, that every team

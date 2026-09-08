@@ -77,10 +77,6 @@ func clear_assists() -> void:
 	_last_passer.clear()
 
 
-func clear_pass_credit(player_id: int) -> void:
-	_last_passer.erase(player_id)
-
-
 func team_rows(team_index: int) -> Array:
 	var rows: Array = []
 	for id in players:

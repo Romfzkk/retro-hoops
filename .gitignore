@@ -1,4 +1,4 @@
-# Godot editor binaries and export templates, fetched by tools/dev/setup.sh
+# Local engine binaries and export templates
 /tools/*.exe
 /tools/*.zip
 /tools/*.tpz
@@ -8,5 +8,14 @@
 game/.godot/
 game/android/
 
-# Character exports under test, dropped in by tools/dev/inspect_model.sh
+# Character exports being evaluated
 game/devmodels/
+
+# Local caches and credentials
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.keystore
+*.jks
+*.p12
