@@ -18,6 +18,8 @@ var stride_phase := 0.0
 var dribble_phase := 0.0
 var dribble_driven := false
 var landing := 0.0
+## Deepens the crouch while a jump is loading.
+var gather := 0.0
 
 var speed := 0.0
 var top_speed := 7.0
@@ -61,7 +63,7 @@ func _legs(gait: float) -> void:
 	if not grounded:
 		_air_legs()
 		return
-	if speed < 0.4:
+	if speed < 0.4 or gather > 0.01:
 		_planted_legs(gait)
 		return
 
@@ -79,7 +81,8 @@ func _legs(gait: float) -> void:
 
 
 func _planted_legs(gait: float) -> void:
-	var crouch := (DEFENCE_CROUCH if defending else 0.16) + landing * 0.35
+	var crouch := (DEFENCE_CROUCH if defending else 0.16) \
+		+ landing * 0.35 + gather * 0.55
 	var idle_sway := sin(dribble_phase * 0.35) * 0.02
 	for side in [1.0, -1.0]:
 		var tag := "l" if side > 0.0 else "r"
@@ -134,7 +137,9 @@ func _arms(gait: float) -> void:
 		Action.CELEBRATE:
 			_celebrate_arms()
 		_:
-			if has_ball:
+			if gather > 0.01 or (not grounded and not has_ball):
+				_jump_arms()
+			elif has_ball:
 				_dribble_arms(gait)
 			else:
 				_running_arms(gait)
@@ -222,6 +227,21 @@ func _layup_arms() -> void:
 		Vector3(lerpf(1.5, 0.35, minf(t * 1.6, 1.0)), 0.0, 0.0))
 	rig.set_target("shoulder_%s" % other, Vector3(0.9, 0.0, -rig.lateral_side(ball_hand) * 0.5))
 	rig.set_target("elbow_%s" % other, Vector3(1.4, 0.0, 0.0))
+
+
+# Arms are what a jump is driven with. They wind back over the gather, swing
+# through as the feet leave, and finish up at the peak. Leaving them running
+# alongside the body is most of why a jump read as a lift rather than a jump.
+func _jump_arms() -> void:
+	var drive := clampf(0.5 + airborne * 0.5, 0.0, 1.0)
+	if gather > 0.01:
+		drive = -gather * 0.55
+	for side in [1.0, -1.0]:
+		var tag := "l" if side > 0.0 else "r"
+		rig.set_target("shoulder_%s" % tag,
+			Vector3(lerpf(0.0, 2.45, drive), 0.0, rig.lateral_side(side) * 0.20))
+		rig.set_target("elbow_%s" % tag,
+			Vector3(lerpf(0.85, 0.30, maxf(drive, 0.0)), 0.0, 0.0))
 
 
 func _arms_overhead() -> void:

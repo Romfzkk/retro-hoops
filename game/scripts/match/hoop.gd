@@ -28,8 +28,8 @@ render_mode cull_disabled, depth_draw_opaque;
 
 uniform vec4 net_colour : source_color = vec4(0.92, 0.92, 0.90, 1.0);
 uniform float swish = 0.0;
-uniform float strands = 12.0;
-uniform float rings = 7.0;
+uniform float strands = 16.0;
+uniform float rings = 10.0;
 
 void vertex() {
 	// UV.y runs 0 at the rim to 1 at the hem; the hem reacts most.
@@ -167,15 +167,39 @@ func _add_rim() -> void:
 	var torus := TorusMesh.new()
 	torus.inner_radius = CourtMetrics.RIM_RADIUS - RIM_TUBE_RADIUS
 	torus.outer_radius = CourtMetrics.RIM_RADIUS + RIM_TUBE_RADIUS
-	torus.rings = 32
-	torus.ring_segments = 10
+	torus.rings = 64
+	torus.ring_segments = 20
 	ring.mesh = torus
-	ring.material_override = Materials.flat(Color(0.92, 0.32, 0.09), 0.35, 0.6)
+	ring.material_override = Materials.flat(Color(0.86, 0.26, 0.06), 0.28, 0.85)
+	_add_net_hooks(ring)
 	body.add_child(ring)
 
 	_add_rim_bracket(body)
 	CollisionLayers.apply_to_world(body)
 	add_child(body)
+
+
+## The loops the net hangs from. Small, but a bare ring with a net floating
+## under it is the detail whose absence reads as unfinished.
+func _add_net_hooks(parent: Node3D) -> void:
+	const HOOKS := 12
+	var hook_material := Materials.flat(Color(0.78, 0.78, 0.80), 0.35, 0.9)
+	for i in HOOKS:
+		var angle := TAU * float(i) / float(HOOKS)
+		var hook := MeshInstance3D.new()
+		var loop := TorusMesh.new()
+		loop.inner_radius = 0.006
+		loop.outer_radius = 0.017
+		loop.rings = 12
+		loop.ring_segments = 8
+		hook.mesh = loop
+		hook.material_override = hook_material
+		hook.position = Vector3(cos(angle), -RIM_TUBE_RADIUS * 0.6, sin(angle)) 			* CourtMetrics.RIM_RADIUS
+		hook.position.y = -RIM_TUBE_RADIUS * 0.6
+		# Stand each loop up and turn it to face along the ring.
+		hook.rotation = Vector3(PI * 0.5, -angle, 0.0)
+		hook.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(hook)
 
 
 func _add_rim_bracket(parent: Node3D) -> void:
@@ -198,7 +222,7 @@ func _add_net() -> void:
 	cylinder.top_radius = CourtMetrics.RIM_RADIUS * 0.98
 	cylinder.bottom_radius = CourtMetrics.RIM_RADIUS * 0.62
 	cylinder.height = NET_LENGTH
-	cylinder.radial_segments = 24
+	cylinder.radial_segments = 32
 	cylinder.rings = 6
 	cylinder.cap_top = false
 	cylinder.cap_bottom = false
@@ -264,9 +288,9 @@ func _process(delta: float) -> void:
 	if _flex > 0.001 and _ring != null:
 		_flex = maxf(0.0, _flex - delta * 3.4)
 		# Tips down toward the court, the way a breakaway ring gives.
-		var tilt := _flex * 0.30
+		var tilt := _flex * 0.46
 		_ring.rotation.z = -CourtMetrics.attack_sign(basket) * tilt
-		_ring.position.y = -_flex * 0.05
+		_ring.position.y = -_flex * 0.09
 
 
 # Called by the match each physics tick. Returns the points scored, or 0.

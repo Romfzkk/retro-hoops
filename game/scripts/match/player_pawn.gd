@@ -23,10 +23,15 @@ const MIN_RELEASE_QUALITY := 0.30
 const RELEASE_EXTENSION := 0.08
 const STEAL_TIME := 0.42
 const STUMBLE_TIME := 0.55
-const DUNK_RANGE := 3.4
+## Take-off range. A dunk should be on from the edge of the paint, not
+## only from under the rim.
+const DUNK_RANGE := 4.4
 ## How long the dunk owns the player: the rise, the hang and the landing. It
 ## used to hand back 0.4s after touchdown, which cut the animation in half.
 const DUNK_HANG := 0.95
+## A jump gathers before it leaves the floor. Without it the player springs
+## from standing, which is the single thing that made jumping read as wrong.
+const JUMP_WINDUP := 0.11
 const LAYUP_RANGE := 4.2
 ## Below this you go up with it whether or not you are running.
 const STANDING_LAYUP_RANGE := 2.3
@@ -80,6 +85,9 @@ var _acceleration := 24.0
 var _jump_height := 0.7
 var _rng := RandomNumberGenerator.new()
 var dunk_power := 0.0
+## 0 to 1 while a jump is dipping before it leaves the floor.
+var gather := 0.0
+var _jump_launched := false
 var _dribble_phase := 0.0
 var _last_bounce := 0
 var _facing := Vector3.FORWARD
@@ -147,7 +155,9 @@ func max_reach() -> float:
 
 
 func can_dunk() -> bool:
-	return max_reach() > CourtMetrics.RIM_HEIGHT + 0.16
+	# Getting the hand over the ring is enough; the finish itself is not in
+	# doubt once a player is up there.
+	return max_reach() > CourtMetrics.RIM_HEIGHT + 0.02
 
 
 func rim() -> Vector3:
@@ -528,7 +538,7 @@ func _tick_dunk(delta: float) -> void:
 		var flat := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
 		# A hard approach goes higher, so a fast break finishes above the rim
 		# rather than scraping it.
-		var rise := sqrt(2.0 * GRAVITY * jump_height() * (1.0 + dunk_power * 0.22))
+		var rise := sqrt(2.0 * GRAVITY * jump_height() * (1.0 + dunk_power * 0.55))
 		velocity = flat.normalized() * minf(flat.length() * 1.9, _max_speed * 1.15)
 		velocity.y = rise
 	var hand_height := global_position.y + standing_reach()
@@ -608,12 +618,22 @@ func contest_jump() -> void:
 	if not is_on_floor():
 		return
 	_enter(State.JUMP)
-	velocity.y = sqrt(2.0 * GRAVITY * jump_height())
+	_jump_launched = false
 
 
 func _tick_jump(delta: float) -> void:
+	if not _jump_launched:
+		# Dip, then drive. The gather is short enough that a contest still
+		# beats the shooter to the ball.
+		gather = clampf(state_time / JUMP_WINDUP, 0.0, 1.0)
+		_walk(delta, 0.08)
+		if state_time >= JUMP_WINDUP:
+			velocity.y = sqrt(2.0 * GRAVITY * jump_height())
+			_jump_launched = true
+			gather = 0.0
+		return
 	_walk(delta, 0.35)
-	if is_on_floor() and state_time > 0.25:
+	if is_on_floor() and state_time > JUMP_WINDUP + 0.25:
 		_enter(State.LOCOMOTION)
 
 
@@ -777,6 +797,7 @@ func _drive_animator(delta: float) -> void:
 	animator.speed = Vector3(velocity.x, 0.0, velocity.z).length()
 	animator.grounded = is_on_floor()
 	animator.airborne = clampf(velocity.y / 4.0, -1.0, 1.0)
+	animator.gather = gather
 	animator.has_ball = has_ball
 	animator.ball_hand = ball_hand
 	animator.defending = not has_ball and _team_on_defence()
@@ -837,3 +858,5 @@ func _action_progress() -> float:
 func _enter(next: State) -> void:
 	state = next
 	state_time = 0.0
+	if next != State.JUMP:
+		gather = 0.0

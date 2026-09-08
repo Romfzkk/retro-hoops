@@ -14,6 +14,10 @@ const POSES := [
 		"t": 1.0, "air": true},
 	{"label": "defend", "action": PlayerAnimator.Action.NONE, "speed": 0.0,
 		"ball": false, "defend": true},
+	{"label": "gather", "action": PlayerAnimator.Action.NONE, "speed": 0.0,
+		"ball": false, "gather": 0.9},
+	{"label": "rising", "action": PlayerAnimator.Action.NONE, "speed": 0.0,
+		"ball": false, "air": true, "airborne": 0.9},
 ]
 
 var animators: Array[PlayerAnimator] = []
@@ -63,6 +67,8 @@ func _ready() -> void:
 		animator.action_t = float(pose.get("t", 0.0))
 		animator.grounded = not bool(pose.get("air", false))
 		animator.defending = bool(pose.get("defend", false))
+		animator.gather = float(pose.get("gather", 0.0))
+		animator.airborne = float(pose.get("airborne", 0.0))
 		animator.stride_phase = 1.1
 		animator.tick(0.016)
 		rig.snap_to_target()
