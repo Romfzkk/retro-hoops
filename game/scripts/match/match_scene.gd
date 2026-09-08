@@ -1201,7 +1201,7 @@ func _set_play_permissions() -> void:
 	for squad in squads:
 		for pawn: PlayerPawn in squad:
 			var live := ctx.is_live() and not _period_pending
-			var at_line := ctx.phase == MatchContext.Phase.FREE_THROW \
+			var at_line: bool = ctx.phase == MatchContext.Phase.FREE_THROW \
 				and _free_throws.get("shooter") == pawn \
 				and float(_free_throws.get("timer", 1.0)) <= 0.0
 			pawn.actions_enabled = live or at_line

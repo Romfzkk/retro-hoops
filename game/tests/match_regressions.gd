@@ -1,6 +1,11 @@
 extends Node
 
-class TestMatch extends "res://scripts/match/match_scene.gd":
+const MatchSceneScript = preload("res://scripts/match/match_scene.gd")
+
+# Suppresses the real _ready so the fixture can assemble a minimal match by
+# hand. Extending the script by path string left the class unresolved, which
+# loaded the scene without a script and hung the run instead of failing it.
+class TestMatch extends MatchSceneScript:
 	func _ready() -> void:
 		set_physics_process(false)
 

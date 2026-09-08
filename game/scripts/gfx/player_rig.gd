@@ -41,6 +41,15 @@ static func create(player: Dictionary, team: Dictionary, host: Node,
 	return rig
 
 
+# A skeleton outside the tree does not recompute its global poses, and the rig
+# is built before whoever made it adds it. Without this, anything reading a
+# bone position on the first frame - reach, a grip point, a test - sees the
+# bind pose and concludes the retarget did nothing.
+func _ready() -> void:
+	if _retarget != null:
+		_retarget.flush()
+
+
 func _build(player: Dictionary, team: Dictionary, host: Node) -> void:
 	var body := _proportions(player)
 	shoulder_height = body["hip_y"] + body["torso"]
@@ -664,3 +673,5 @@ func snap_to_target() -> void:
 	for key in JOINTS:
 		pose[key] = _target_pose[key]
 		_write_joint(key, _target_pose[key])
+	if _retarget != null:
+		_retarget.flush()

@@ -36,4 +36,4 @@ static func draw_slot(canvas: CanvasItem, rect: Rect2, slot: String,
 	var source := art.get_size()
 	var cover := maxf(rect.size.x / source.x, rect.size.y / source.y)
 	var crop := rect.size / cover
-	canvas.draw_texture_rect_region(rect, art, Rect2((source - crop) * 0.5, crop), tint)
+	canvas.draw_texture_rect_region(art, rect, Rect2((source - crop) * 0.5, crop), tint)

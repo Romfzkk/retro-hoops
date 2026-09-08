@@ -162,7 +162,7 @@ static func validate(root: Node3D, skeleton: Skeleton3D) -> PackedStringArray:
 		if instance.mesh == null:
 			continue
 		for surface in instance.mesh.get_surface_count():
-			var format := instance.mesh.surface_get_format(surface)
+			var format: int = instance.mesh.surface_get_format(surface)
 			if format & Mesh.ARRAY_FORMAT_BONES and format & Mesh.ARRAY_FORMAT_WEIGHTS:
 				skinned = true
 	if not skinned:
