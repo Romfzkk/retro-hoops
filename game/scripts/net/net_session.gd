@@ -45,13 +45,16 @@ func _ready() -> void:
 		join_game(address, DEFAULT_PORT)
 
 
-# Both sides generate the same exhibition league from a fixed seed, so a match
-# only needs team ids and rules on the wire, not roster data.
+# Send the actual selected rosters. Saves and enabled packs can differ between peers.
 func start_match(config: Dictionary) -> void:
 	if role != Role.HOST:
 		return
-	_begin_match.rpc(config)
-	_apply_match(config)
+	var payload := config.duplicate(true)
+	var teams: Array = Game.exhibition_league()["teams"]
+	payload["home_team"] = teams[posmod(int(config["home"]), teams.size())].duplicate(true)
+	payload["away_team"] = teams[posmod(int(config["away"]), teams.size())].duplicate(true)
+	_begin_match.rpc(payload)
+	_apply_match(payload)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -60,10 +63,13 @@ func _begin_match(config: Dictionary) -> void:
 
 
 func _apply_match(config: Dictionary) -> void:
-	var teams: Array = Game.exhibition_league()["teams"]
+	if not config.get("home_team") is Dictionary or not config.get("away_team") is Dictionary:
+		connection_failed.emit("The host did not send a roster. Both players need the same game version.")
+		return
+	remote_intent.reset()
 	var setup := MatchSetup.new()
-	setup.home = teams[int(config["home"]) % teams.size()]
-	setup.away = teams[int(config["away"]) % teams.size()]
+	setup.home = config["home_team"].duplicate(true)
+	setup.away = config["away_team"].duplicate(true)
 	setup.arena = int(config.get("arena", 0))
 	setup.mode = int(config.get("mode", MatchSetup.Mode.FIVE_V_FIVE)) as MatchSetup.Mode
 	setup.quarters = int(config.get("quarters", 4))

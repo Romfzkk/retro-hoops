@@ -29,7 +29,7 @@ static func attach(scene: Node) -> MatchSync:
 
 
 func _physics_process(delta: float) -> void:
-	if not Net.is_online():
+	if not Net.is_online() or match_scene.ctx.phase == MatchContext.Phase.OVER:
 		return
 	if Net.is_host():
 		_accumulator += delta
@@ -66,13 +66,17 @@ func _send_snapshot() -> void:
 		float(match_scene.ball.state),
 	])
 
+	var remote_slot := -1
+	for controller: HumanController in match_scene.humans:
+		if controller.device == HumanController.Device.REMOTE and controller.active != null:
+			remote_slot = controller.active.lineup_slot
 	var clock: MatchClock = match_scene.clock
 	var scoreboard := PackedInt32Array([
 		match_scene.box.team_points[0], match_scene.box.team_points[1],
 		clock.quarter, int(clock.remaining * 10.0), int(clock.shot_clock * 10.0),
 		int(match_scene.ctx.phase), match_scene.ctx.possession, int(clock.shot_in_flight),
 		int(match_scene._period_pending), int(match_scene._free_throws.get("remaining", 0)),
-		int(match_scene._free_throws.get("total", 0)),
+		int(match_scene._free_throws.get("total", 0)), remote_slot,
 	])
 	_apply_snapshot.rpc_id(Net.client_id, pawns, ball_state, scoreboard)
 
@@ -129,6 +133,12 @@ func _apply_snapshot(pawns: PackedFloat32Array, ball_state: PackedFloat32Array,
 			clock.shot_in_flight = bool(scoreboard[7])
 			match_scene._period_pending = bool(scoreboard[8])
 			match_scene._free_throws = {"remaining": scoreboard[9], "total": scoreboard[10]}
+		if scoreboard.size() >= 12 and not match_scene.humans.is_empty():
+			var controller: HumanController = match_scene.humans[0]
+			for pawn: PlayerPawn in controller.squad:
+				if pawn.lineup_slot == scoreboard[11]:
+					controller._set_active(pawn)
+					break
 
 
 
@@ -138,7 +148,10 @@ func _send_intent() -> void:
 		return
 	var controller: HumanController = controllers[0]
 	var intent: PlayerIntent = controller.local_intent
-	_receive_intent.rpc_id(1, intent.move, intent.aim, _pack_buttons(intent))
+	var buttons := _pack_buttons(intent)
+	_receive_intent.rpc_id(1, intent.move, intent.aim, buttons & 3)
+	if buttons & 124:
+		_receive_action_edges.rpc_id(1, buttons)
 
 
 func _pack_buttons(intent: PlayerIntent) -> int:
@@ -171,11 +184,22 @@ func _receive_intent(move: Vector2, aim: Vector2, buttons: int) -> void:
 	intent.aim = aim.limit_length(1.0)
 	intent.sprint = bool(buttons & (1 << 0))
 	intent.shoot_held = bool(buttons & (1 << 1))
-	intent.shoot_pressed = bool(buttons & (1 << 2))
-	intent.shoot_released = bool(buttons & (1 << 3))
-	intent.pass_pressed = bool(buttons & (1 << 4))
-	intent.special_pressed = bool(buttons & (1 << 5))
-	intent.switch_pressed = bool(buttons & (1 << 6))
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _receive_action_edges(buttons: int) -> void:
+	if not Net.is_host() or multiplayer.get_remote_sender_id() != Net.client_id:
+		return
+	if not match_scene.ctx.is_live() and match_scene.ctx.phase != MatchContext.Phase.FREE_THROW:
+		return
+	var intent := Net.remote_intent
+	# Accumulate until the next physics tick. A newer movement snapshot must
+	# not erase a press or release that arrived on the reliable channel.
+	intent.shoot_pressed = intent.shoot_pressed or bool(buttons & (1 << 2))
+	intent.shoot_released = intent.shoot_released or bool(buttons & (1 << 3))
+	intent.pass_pressed = intent.pass_pressed or bool(buttons & (1 << 4))
+	intent.special_pressed = intent.special_pressed or bool(buttons & (1 << 5))
+	intent.switch_pressed = intent.switch_pressed or bool(buttons & (1 << 6))
 	intent.switch_pressed = bool(buttons & (1 << 6))
 
 

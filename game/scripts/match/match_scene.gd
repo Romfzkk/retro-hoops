@@ -23,6 +23,7 @@ const FREE_THROW_SETUP := 1.3
 const FREE_THROW_GAP := 0.9
 const FREE_THROW_TIMEOUT := 15.0
 const BLOCK_REACH := 1.7
+const SHOT_RESOLUTION_LIMIT := 8.0
 
 var setup: MatchSetup
 var ctx := MatchContext.new()
@@ -62,6 +63,7 @@ var _tipoff_jumpers: Array[PlayerPawn] = []
 var _resume_phase: MatchContext.Phase = MatchContext.Phase.LIVE
 var _elapsed := 0.0
 var _pause_layer: CanvasLayer
+var _connection_lost := false
 var _rng := RandomNumberGenerator.new()
 
 
@@ -245,6 +247,8 @@ func _setup_online_controllers() -> void:
 			var team: Dictionary = setup.home if controller.team_index == 0 else setup.away
 			markers.append(PlayerMarker.create(self, Color(team["primary"])))
 	MatchSync.attach(self)
+	Net.peer_left.connect(_on_peer_left)
+	Net.connection_failed.connect(_on_connection_lost)
 
 
 func _setup_hud() -> void:
@@ -265,6 +269,8 @@ func _physics_process(delta: float) -> void:
 	if ctx.phase == MatchContext.Phase.OVER:
 		return
 	_elapsed += delta
+	if not _pending_shot.is_empty():
+		_pending_shot["age"] = float(_pending_shot.get("age", 0.0)) + delta
 	if setup.online and not Net.is_host():
 		for controller in humans:
 			if _pause_layer == null:
@@ -310,13 +316,16 @@ func _physics_process(delta: float) -> void:
 		# Score before catches: a made basket has to register before anyone is
 		# credited with grabbing the ball out of the net.
 		_check_scoring()
-		if ctx.is_live() and _period_pending and ball.shot_has_fallen():
-			_resolve_miss()
-			if ctx.phase != MatchContext.Phase.FREE_THROW:
-				_complete_period()
-		if ctx.is_live() and not _period_pending and ball.shot_has_fallen():
+		var held_up := not _pending_shot.is_empty() and float(_pending_shot.get("age", 0.0)) >= SHOT_RESOLUTION_LIMIT
+		if ctx.is_live() and (ball.shot_has_fallen() or held_up):
 			clock.shot_in_flight = false
 			_resolve_miss()
+			if ctx.is_live():
+				if _period_pending:
+					_complete_period()
+				elif held_up:
+					# A ball resting on the board must not suspend the clock forever.
+					ball.go_loose()
 		if ctx.is_live() and not _period_pending:
 			_check_catches()
 		if ctx.is_live() and not _period_pending:
@@ -567,7 +576,14 @@ func _open_pause_menu() -> void:
 		{"id": "quit", "label": "QUIT TO MENU"},
 	]
 	menu.chosen.connect(_on_pause_choice)
-	menu.cancelled.connect(_close_pause_menu)
+	if _connection_lost:
+		menu.title = "CONNECTION LOST"
+		menu.back_label = "EXIT"
+		menu.footer = "The match stopped because the other player disconnected."
+		menu.rows = [{"id": "quit", "label": "QUIT TO MENU"}]
+		menu.cancelled.connect(func(): _on_pause_choice("quit"))
+	else:
+		menu.cancelled.connect(_close_pause_menu)
 
 	_pause_layer = CanvasLayer.new()
 	_pause_layer.layer = 10
@@ -575,11 +591,11 @@ func _open_pause_menu() -> void:
 	# The layer has to keep running while everything else is stopped.
 	_pause_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_pause_layer)
-	get_tree().paused = not setup.online
+	get_tree().paused = not setup.online or _connection_lost
 
 
 func _close_pause_menu() -> void:
-	if _pause_layer == null:
+	if _pause_layer == null or _connection_lost:
 		return
 	get_tree().paused = false
 	touch.release_all()
@@ -594,10 +610,27 @@ func _show_box_score() -> void:
 
 
 func _on_pause_choice(id: String) -> void:
+	if id == "quit":
+		_connection_lost = false
 	_close_pause_menu()
 	if id == "quit":
 		Net.shutdown()
 		Game.goto("res://scenes/main_menu.tscn")
+
+
+func _on_peer_left(_id: int) -> void:
+	_on_connection_lost("Opponent disconnected")
+
+
+func _on_connection_lost(_reason: String) -> void:
+	if ctx.phase == MatchContext.Phase.OVER or _connection_lost:
+		return
+	_close_pause_menu()
+	_connection_lost = true
+	clock.running = false
+	_cancel_player_actions()
+	ball.park()
+	_open_pause_menu()
 
 
 func _on_ball_bounced(_position: Vector3) -> void:

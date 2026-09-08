@@ -14,6 +14,7 @@ func _ready() -> void:
 	_free_throw_scoring()
 	_foul_rebound()
 	_buzzer_shot()
+	_hung_buzzer_shot()
 	_finished_match()
 	_interception()
 	_rim_crossing()
@@ -308,4 +309,17 @@ func _ai_gather() -> void:
 	shooter.shot_charge = 0.7
 	ai.tick(1.0 / 60.0, game.ctx)
 	_check("AI releases after gathering", not shooter.intent.shoot_held)
+	game.free()
+
+
+func _hung_buzzer_shot() -> void:
+	var game := _fixture()
+	game.clock.quarter = 4
+	game.box.team_points = [1, 0]
+	_release(game)
+	game.ball.linear_velocity = Vector3.ZERO
+	game._on_quarter_expired(4)
+	game._pending_shot["age"] = game.SHOT_RESOLUTION_LIMIT
+	game._physics_process(1.0 / 60.0)
+	_check("ball stuck above rim cannot hold the final horn forever", game.ctx.phase == MatchContext.Phase.OVER)
 	game.free()
