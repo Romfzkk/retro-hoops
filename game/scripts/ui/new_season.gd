@@ -45,8 +45,8 @@ func _on_chosen(id: String) -> void:
 		_confirm_overwrite = true
 		_refresh()
 		return
-	Game.start_career(_pick)
-	Game.goto("res://scenes/season_hub.tscn")
+	if Game.start_career(_pick):
+		Game.goto("res://scenes/season_hub.tscn")
 
 
 func _draw_side_panel(scale: float) -> void:
