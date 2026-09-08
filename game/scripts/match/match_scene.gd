@@ -54,6 +54,7 @@ var _verbose := false
 var _pending_shot := {}
 var _period_pending := false
 var _rebound_team := -1
+var _rim_clock_reset := false
 var _phase_timer := 0.0
 var _tipoff_step := 0
 var _tipoff_timer := 0.0
@@ -76,6 +77,13 @@ func _ready() -> void:
 	else:
 		_rng.seed = int(seed_arg)
 
+	if _balance_run:
+		var quarters_arg := FrameCapture.argument("--quarters")
+		var seconds_arg := FrameCapture.argument("--quarter-seconds")
+		if not quarters_arg.is_empty():
+			setup.quarters = maxi(1, int(quarters_arg))
+		if not seconds_arg.is_empty():
+			setup.quarter_seconds = maxi(1, int(seconds_arg))
 	clock = MatchClock.new(setup.quarters, float(setup.quarter_seconds))
 	clock.quarter_expired.connect(_on_quarter_expired)
 	clock.shot_clock_expired.connect(_on_shot_clock_expired)
@@ -140,6 +148,7 @@ func _spawn_squads() -> void:
 			var pawn := PlayerPawn.create(roster[slot], team, team_index, attacking,
 				self, not _balance_run)
 			pawn.lineup_slot = slot
+			pawn.match_difficulty = setup.difficulty
 			pawn.ball = ball
 			pawn.set_random_seed(_rng.randi())
 			add_child(pawn)
@@ -242,6 +251,8 @@ func _setup_hud() -> void:
 	touch = TouchControls.new()
 	hud = MatchHud.new()
 	hud.bind(self)
+	hud.pause_requested.connect(_open_pause_menu)
+	hud.continue_requested.connect(_show_box_score)
 	var layer := CanvasLayer.new()
 	layer.add_child(hud)
 	layer.add_child(touch)
@@ -254,6 +265,20 @@ func _physics_process(delta: float) -> void:
 	if ctx.phase == MatchContext.Phase.OVER:
 		return
 	_elapsed += delta
+	if setup.online and not Net.is_host():
+		for controller in humans:
+			if _pause_layer == null:
+				controller.tick(delta, ctx)
+			else:
+				controller.local_intent.reset()
+		camera.focus_point = ball.global_position
+		camera.attack_basket = ctx.possession
+		if not humans.is_empty():
+			camera.target = humans[0].active
+			if not markers.is_empty():
+				markers[0].target = humans[0].active
+		touch.clear_edges()
+		return
 	_update_context()
 	_set_play_permissions()
 
@@ -263,15 +288,18 @@ func _physics_process(delta: float) -> void:
 			_resume_play()
 
 	if ctx.phase == MatchContext.Phase.TIPOFF:
-		if not setup.online or Net.is_host():
-			_tick_tipoff(delta)
+		_tick_tipoff(delta)
+		touch.clear_edges()
 		return
 
 	for controller in humans:
-		controller.tick(delta, ctx)
+		if _pause_layer != null and controller.device != HumanController.Device.REMOTE:
+			controller.local_intent.reset()
+			if controller.active != null:
+				controller.active.intent.reset()
+		else:
+			controller.tick(delta, ctx)
 
-	if setup.online and not Net.is_host():
-		return
 	for ai in ais:
 		ai.tick(delta, ctx)
 
@@ -507,11 +535,15 @@ func _check_out_of_bounds() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not event.is_pressed():
+	if not event.is_pressed() or event.is_echo():
+		return
+	if ctx.phase == MatchContext.Phase.OVER and (event.is_action("ui_accept") or event.is_action("shoot")):
+		_show_box_score()
+		get_viewport().set_input_as_handled()
 		return
 	if event.is_action("pause") or event.is_action("ui_cancel"):
 		if ctx.phase == MatchContext.Phase.OVER:
-			Game.goto("res://scenes/box_score.tscn")
+			_show_box_score()
 		elif _pause_layer == null:
 			_open_pause_menu()
 
@@ -519,11 +551,16 @@ func _unhandled_input(event: InputEvent) -> void:
 # Esc used to walk straight out of the match with no way back. The tree is
 # paused rather than the scene torn down, so the game is still there behind it.
 func _open_pause_menu() -> void:
+	if _pause_layer != null or ctx.phase == MatchContext.Phase.OVER:
+		return
+	touch.release_all()
 	var menu := MenuScreen.new()
-	menu.title = "PAUSED"
+	menu.title = "MATCH MENU" if setup.online else "PAUSED"
+	menu.details_enabled = false
+	menu.back_label = "RESUME"
 	menu.subtitle = "%s  %d - %d  %s" % [setup.home["abbr"], box.team_points[0],
 		box.team_points[1], setup.away["abbr"]]
-	menu.footer = "Move  W/S    Select  Enter    Resume  Esc"
+	menu.footer = "Online play continues while this menu is open" if setup.online else "Resume with Esc or the Resume button"
 	menu.dim_background = false
 	menu.rows = [
 		{"id": "resume", "label": "RESUME"},
@@ -538,20 +575,28 @@ func _open_pause_menu() -> void:
 	# The layer has to keep running while everything else is stopped.
 	_pause_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_pause_layer)
-	get_tree().paused = true
+	get_tree().paused = not setup.online
 
 
 func _close_pause_menu() -> void:
 	if _pause_layer == null:
 		return
 	get_tree().paused = false
+	touch.release_all()
+	Net.remote_intent.reset()
 	_pause_layer.queue_free()
 	_pause_layer = null
+
+
+func _show_box_score() -> void:
+	if ctx.phase == MatchContext.Phase.OVER:
+		Game.goto("res://scenes/box_score.tscn")
 
 
 func _on_pause_choice(id: String) -> void:
 	_close_pause_menu()
 	if id == "quit":
+		Net.shutdown()
 		Game.goto("res://scenes/main_menu.tscn")
 
 
@@ -603,6 +648,7 @@ func _begin_free_throws(shooter: PlayerPawn, attempts: int) -> void:
 	_free_throws = {
 		"shooter": shooter,
 		"remaining": attempts,
+		"total": attempts,
 		"timer": FREE_THROW_SETUP,
 		"awaiting": false,
 		"made": false,
@@ -697,6 +743,8 @@ func _on_shot_released(pawn: PlayerPawn, points: int, quality: float) -> void:
 		return
 	if not _pending_shot.is_empty() or ball.state != Ball.State.SHOT:
 		return
+	_rim_clock_reset = false
+	hud.record_release(pawn)
 	if _try_block(pawn):
 		return
 	if ctx.phase == MatchContext.Phase.FREE_THROW:
@@ -1031,7 +1079,6 @@ func _resume_play() -> void:
 
 
 func _position_for_inbound(to_team: int, from_baseline := false) -> void:
-	var sign_x := CourtMetrics.attack_sign(to_team)
 	for team_index in 2:
 		for pawn: PlayerPawn in squads[team_index]:
 			pawn.velocity = Vector3.ZERO
@@ -1089,6 +1136,8 @@ func _finish() -> void:
 	var result := {
 		"home": int(setup.home["id"]),
 		"away": int(setup.away["id"]),
+		"home_team": setup.home.duplicate(true),
+		"away_team": setup.away.duplicate(true),
 		"home_score": box.team_points[0],
 		"away_score": box.team_points[1],
 		"box": box,
@@ -1122,5 +1171,6 @@ func _set_play_permissions() -> void:
 
 
 func _on_rim_contact() -> void:
-	if ctx.is_live() and not _period_pending and not _pending_shot.is_empty():
+	if ctx.is_live() and not _period_pending and not _pending_shot.is_empty() and not _rim_clock_reset:
+		_rim_clock_reset = true
 		clock.reset_shot_clock(14.0)

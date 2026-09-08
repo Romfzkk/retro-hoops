@@ -25,7 +25,7 @@ var _button_touch: Dictionary = {}
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	visible = Settings.wants_touch_controls()
 	for key in buttons:
@@ -59,6 +59,15 @@ func was_released(action: String) -> bool:
 	return bool(_released.get(action, false))
 
 
+func release_all() -> void:
+	_stick_touch = -1
+	_button_touch.clear()
+	for action in _held:
+		_held[action] = false
+	clear_edges()
+	queue_redraw()
+
+
 func clear_edges() -> void:
 	_pressed.clear()
 	_released.clear()
@@ -84,8 +93,9 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 		var hit := _button_at(event.position)
 		if not hit.is_empty():
 			_button_touch[event.index] = hit
+			if not bool(_held.get(hit, false)):
+				_pressed[hit] = true
 			_held[hit] = true
-			_pressed[hit] = true
 			queue_redraw()
 		return
 
@@ -95,8 +105,9 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 	elif _button_touch.has(event.index):
 		var action: String = _button_touch[event.index]
 		_button_touch.erase(event.index)
-		_held[action] = false
-		_released[action] = true
+		if not _button_touch.values().has(action):
+			_held[action] = false
+			_released[action] = true
 		queue_redraw()
 
 

@@ -16,6 +16,7 @@ const BALL_FLOATS := 7
 
 var match_scene: Node
 var _accumulator := 0.0
+var _received_final := false
 
 
 static func attach(scene: Node) -> MatchSync:
@@ -23,6 +24,7 @@ static func attach(scene: Node) -> MatchSync:
 	sync.name = "MatchSync"
 	sync.match_scene = scene
 	scene.add_child(sync)
+	scene.finished.connect(sync._publish_final)
 	return sync
 
 
@@ -33,13 +35,12 @@ func _physics_process(delta: float) -> void:
 		_accumulator += delta
 		var interval := 1.0 / SNAPSHOT_HZ
 		if _accumulator >= interval:
-			_accumulator = 0.0
+			_accumulator -= interval
 			_send_snapshot()
 	else:
 		_send_intent()
 
 
-# --- host -> client -------------------------------------------------------
 
 func _send_snapshot() -> void:
 	if Net.client_id == 0:
@@ -69,7 +70,9 @@ func _send_snapshot() -> void:
 	var scoreboard := PackedInt32Array([
 		match_scene.box.team_points[0], match_scene.box.team_points[1],
 		clock.quarter, int(clock.remaining * 10.0), int(clock.shot_clock * 10.0),
-		int(match_scene.ctx.phase), match_scene.ctx.possession,
+		int(match_scene.ctx.phase), match_scene.ctx.possession, int(clock.shot_in_flight),
+		int(match_scene._period_pending), int(match_scene._free_throws.get("remaining", 0)),
+		int(match_scene._free_throws.get("total", 0)),
 	])
 	_apply_snapshot.rpc_id(Net.client_id, pawns, ball_state, scoreboard)
 
@@ -88,6 +91,8 @@ func _pack_flags(pawn: PlayerPawn) -> int:
 @rpc("authority", "call_remote", "unreliable_ordered")
 func _apply_snapshot(pawns: PackedFloat32Array, ball_state: PackedFloat32Array,
 		scoreboard: PackedInt32Array) -> void:
+	if _received_final:
+		return
 	var index := 0
 	for team_index in 2:
 		for pawn: PlayerPawn in match_scene.squads[team_index]:
@@ -115,9 +120,17 @@ func _apply_snapshot(pawns: PackedFloat32Array, ball_state: PackedFloat32Array,
 		clock.shot_clock = float(scoreboard[4]) * 0.1
 		match_scene.ctx.phase = scoreboard[5] as MatchContext.Phase
 		match_scene.ctx.possession = scoreboard[6]
+		match_scene.ctx.carrier = null
+		for squad in match_scene.squads:
+			for pawn: PlayerPawn in squad:
+				if bool(pawn._net_flags & (1 << 4)):
+					match_scene.ctx.carrier = pawn
+		if scoreboard.size() >= 11:
+			clock.shot_in_flight = bool(scoreboard[7])
+			match_scene._period_pending = bool(scoreboard[8])
+			match_scene._free_throws = {"remaining": scoreboard[9], "total": scoreboard[10]}
 
 
-# --- client -> host -------------------------------------------------------
 
 func _send_intent() -> void:
 	var controllers: Array = match_scene.humans
@@ -149,9 +162,13 @@ func _pack_buttons(intent: PlayerIntent) -> int:
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func _receive_intent(move: Vector2, aim: Vector2, buttons: int) -> void:
+	if not Net.is_host() or multiplayer.get_remote_sender_id() != Net.client_id:
+		return
+	if match_scene.ctx.phase == MatchContext.Phase.OVER or not move.is_finite() or not aim.is_finite():
+		return
 	var intent := Net.remote_intent
-	intent.move = move
-	intent.aim = aim
+	intent.move = move.limit_length(1.0)
+	intent.aim = aim.limit_length(1.0)
 	intent.sprint = bool(buttons & (1 << 0))
 	intent.shoot_held = bool(buttons & (1 << 1))
 	intent.shoot_pressed = bool(buttons & (1 << 2))
@@ -159,3 +176,43 @@ func _receive_intent(move: Vector2, aim: Vector2, buttons: int) -> void:
 	intent.pass_pressed = bool(buttons & (1 << 4))
 	intent.special_pressed = bool(buttons & (1 << 5))
 	intent.switch_pressed = bool(buttons & (1 << 6))
+	intent.switch_pressed = bool(buttons & (1 << 6))
+
+
+func _publish_final(result: Dictionary) -> void:
+	if not Net.is_host() or Net.client_id == 0:
+		return
+	var payload := result.duplicate()
+	var box: BoxScore = result["box"]
+	payload["box"] = {"players": box.players, "team_points": box.team_points,
+		"quarter_points": box.quarter_points}
+	_receive_final.rpc_id(Net.client_id, payload)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _receive_final(payload: Dictionary) -> void:
+	if _received_final:
+		return
+	_received_final = true
+	var box := BoxScore.new()
+	box.players = payload["box"]["players"]
+	box.team_points = payload["box"]["team_points"]
+	box.quarter_points = payload["box"]["quarter_points"]
+	var result := payload.duplicate()
+	result["box"] = box
+	match_scene.box = box
+	match_scene.ctx.phase = MatchContext.Phase.OVER
+	match_scene.ctx.carrier = null
+	match_scene.clock.running = false
+	match_scene._period_pending = false
+	match_scene.ball.park()
+	match_scene._cancel_player_actions()
+	for squad in match_scene.squads:
+		for pawn: PlayerPawn in squad:
+			pawn._net_flags = 1 << 5
+			pawn._net_speed = 0.0
+			pawn._net_position = pawn.global_position
+	match_scene.ball.apply_network_state(match_scene.ball.global_position, Vector3.ZERO, Ball.State.DEAD)
+	match_scene._set_play_permissions()
+	Game.last_box_score = result
+	match_scene.hud.show_final(result)

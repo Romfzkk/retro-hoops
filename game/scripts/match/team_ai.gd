@@ -64,6 +64,10 @@ func tick(delta: float, ctx: MatchContext) -> void:
 		pawn.intent.reset()
 		if not ctx.is_live():
 			continue
+		if pawn.state == PlayerPawn.State.SHOOT:
+			# Keep the trigger held across decision intervals through the gather.
+			pawn.intent.shoot_held = pawn.shot_charge < 0.65
+			continue
 		if ctx.phase == MatchContext.Phase.SHOT_IN_FLIGHT \
 				or ctx.phase == MatchContext.Phase.LOOSE_BALL:
 			_chase_ball(pawn, ctx)

@@ -24,7 +24,6 @@ var host_team := 0
 var lobby_name := ""
 ## Intent the visiting client uploaded this frame, applied by the host.
 var remote_intent := PlayerIntent.new()
-var remote_switch_requested := false
 
 var _discovery: PacketPeerUDP
 var _broadcast: PacketPeerUDP
@@ -126,6 +125,7 @@ func join_game(address: String, port: int) -> Error:
 
 
 func shutdown() -> void:
+	remote_intent.reset()
 	_stop_broadcasting()
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.close()

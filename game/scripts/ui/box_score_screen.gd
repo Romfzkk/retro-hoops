@@ -7,6 +7,9 @@ var _result: Dictionary
 var _box: BoxScore
 var _shown_team := 0
 var _recorded := false
+var _table: Tree
+
+const COLUMNS := ["PLAYER", "PTS", "FG", "FT", "3P", "REB", "AST", "STL", "BLK", "TO", "PF"]
 
 
 func _ready() -> void:
@@ -17,27 +20,33 @@ func _ready() -> void:
 		Game.goto("res://scenes/main_menu.tscn")
 		return
 	_box = _result["box"]
+	_build_table()
 	_record_into_season()
 
 	title = "FINAL"
 	subtitle = "%s %d   -   %d %s" % [
-		String(Game.team_by_id(int(_result["home"]))["abbr"]), int(_result["home_score"]),
+		String(_result_team(0)["abbr"]), int(_result["home_score"]),
 		int(_result["away_score"]),
-		String(Game.team_by_id(int(_result["away"]))["abbr"])]
+		String(_result_team(1)["abbr"])]
 	footer = "Switch team  A/D    Continue  Enter"
 	chosen.connect(_on_chosen)
 	cancelled.connect(_on_continue)
 	_refresh()
 
 
+func _result_team(index: int) -> Dictionary:
+	return _result["home_team" if index == 0 else "away_team"]
+
+
 func _refresh() -> void:
-	var home: Dictionary = Game.team_by_id(int(_result["home"]))
-	var away: Dictionary = Game.team_by_id(int(_result["away"]))
+	var home: Dictionary = _result_team(0)
+	var away: Dictionary = _result_team(1)
 	rows = [
 		{"id": "team", "label": "BOX SCORE",
 			"value": String(home["abbr"] if _shown_team == 0 else away["abbr"])},
 		{"id": "continue", "label": "CONTINUE"},
 	]
+	_populate_table()
 
 
 func on_adjust(id: String, _step: int) -> void:
@@ -54,6 +63,7 @@ func _on_chosen(id: String) -> void:
 
 
 func _on_continue() -> void:
+	Net.shutdown()
 	if int(_result.get("season_day", -1)) >= 0 and not Game.league.is_empty():
 		Game.goto("res://scenes/season_hub.tscn")
 	else:
@@ -123,48 +133,57 @@ func _record_into_playoffs() -> bool:
 	return true
 
 
-func _draw_side_panel(scale: float) -> void:
-	var rect := detail_rect(scale)
-	UiTheme.panel(self, rect, UiTheme.SURFACE, 0.80)
-	var pad := UiTheme.L * scale
-	var team: Dictionary = Game.team_by_id(int(_result["home" if _shown_team == 0 else "away"]))
+func _build_table() -> void:
+	_table = Tree.new()
+	_table.hide_root = true
+	_table.columns = COLUMNS.size()
+	_table.column_titles_visible = true
+	_table.add_theme_font_override("font", UiTheme.text_font())
+	_table.add_theme_font_override("title_button_font", UiTheme.bold_font())
+	_table.add_theme_color_override("font_color", UiTheme.TEXT)
+	_table.add_theme_constant_override("v_separation", 14)
+	for column in COLUMNS.size():
+		_table.set_column_title(column, COLUMNS[column])
+		_table.set_column_custom_minimum_width(column, 170 if column == 0 else 54)
+		_table.set_column_expand(column, column == 0)
+	add_child(_table)
 
-	draw_rect(Rect2(Vector2(rect.position.x + pad, rect.position.y + pad),
-		Vector2(rect.size.x - pad * 2.0, 5.0 * scale)), Color(team["primary"]))
-	UiTheme.label(self, League.team_full(team).to_upper(),
-		Vector2(rect.position.x + pad, rect.position.y + 52.0 * scale),
-		UiTheme.display_font(), UiTheme.size(UiTheme.SUB, scale), UiTheme.TEXT)
 
-	var columns := [
-		{"key": "pts", "title": "PTS", "x": 0.52},
-		{"key": "reb", "title": "REB", "x": 0.62},
-		{"key": "ast", "title": "AST", "x": 0.72},
-		{"key": "stl", "title": "STL", "x": 0.82},
-		{"key": "blk", "title": "BLK", "x": 0.90},
-	]
-	var header_y := rect.position.y + 84.0 * scale
-	UiTheme.label(self, "PLAYER", Vector2(rect.position.x + pad, header_y),
-		UiTheme.bold_font(), UiTheme.size(UiTheme.MICRO, scale), UiTheme.TEXT_DIM)
-	UiTheme.label(self, "FG", Vector2(rect.position.x + rect.size.x * 0.38, header_y),
-		UiTheme.bold_font(), UiTheme.size(UiTheme.MICRO, scale), UiTheme.TEXT_DIM)
-	for column in columns:
-		UiTheme.label(self, String(column["title"]),
-			Vector2(rect.position.x + rect.size.x * float(column["x"]), header_y),
-			UiTheme.bold_font(), UiTheme.size(UiTheme.MICRO, scale), UiTheme.TEXT_DIM)
-
-	var y := header_y + 26.0 * scale
+func _populate_table() -> void:
+	_table.clear()
+	var root := _table.create_item()
 	for row in _box.team_rows(_shown_team):
-		UiTheme.label(self, "%2d  %s" % [int(row["num"]), String(row["name"])],
-			Vector2(rect.position.x + pad, y), UiTheme.text_font(),
-			UiTheme.size(UiTheme.LABEL, scale), UiTheme.TEXT)
-		UiTheme.label(self, "%d/%d" % [int(row["fgm"]), int(row["fga"])],
-			Vector2(rect.position.x + rect.size.x * 0.38, y), UiTheme.text_font(),
-			UiTheme.size(UiTheme.LABEL, scale), UiTheme.TEXT_DIM)
-		for column in columns:
-			var value := int(row[String(column["key"])])
-			UiTheme.label(self, str(value),
-				Vector2(rect.position.x + rect.size.x * float(column["x"]), y),
-				UiTheme.text_font(), UiTheme.size(UiTheme.LABEL, scale),
-				UiTheme.GOLD if String(column["key"]) == "pts" and value >= 15
-				else UiTheme.TEXT)
-		y += 24.0 * scale
+		var item := _table.create_item(root)
+		var values := ["#%d  %s" % [row["num"], row["name"]], str(row["pts"]),
+			"%d/%d" % [row["fgm"], row["fga"]], "%d/%d" % [row["ftm"], row["fta"]],
+			"%d/%d" % [row["tpm"], row["tpa"]], str(row["reb"]), str(row["ast"]),
+			str(row["stl"]), str(row["blk"]), str(row["to"]), str(row["pf"])]
+		for column in values.size():
+			item.set_text(column, values[column])
+			item.set_selectable(column, false)
+			if column > 0:
+				item.set_text_alignment(column, HORIZONTAL_ALIGNMENT_CENTER)
+
+
+func _process(delta: float) -> void:
+	super(delta)
+	if _table == null:
+		return
+	var scale := UiTheme.scale_for(view())
+	var rect := detail_rect(scale)
+	_table.visible = _wide_details(scale) or _show_details
+	_table.position = rect.position + Vector2(0.0, 50.0 * scale)
+	_table.size = Vector2(rect.size.x, maxf(80.0, rect.size.y - 50.0 * scale))
+	_table.add_theme_font_size_override("font_size", UiTheme.size(UiTheme.BODY, scale))
+	_table.add_theme_font_size_override("title_button_font_size", UiTheme.size(UiTheme.LABEL, scale))
+
+
+func _draw_side_panel(scale: float) -> void:
+	if _result.is_empty():
+		return
+	var rect := detail_rect(scale)
+	var team := _result_team(_shown_team)
+	draw_rect(Rect2(rect.position, Vector2(rect.size.x, 3.0)), Color(team["primary"]))
+	draw_string(UiTheme.display_font(), rect.position + Vector2(0.0, 32.0 * scale),
+		League.team_full(team).to_upper(), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x,
+		UiTheme.size(UiTheme.SUB, scale), UiTheme.TEXT)

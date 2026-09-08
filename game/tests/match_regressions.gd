@@ -18,6 +18,12 @@ func _ready() -> void:
 	_interception()
 	_rim_crossing()
 	_shot_clock_flight()
+	_rim_clock_once()
+	_free_throw_inputs()
+	_release_sequence()
+	_ai_gather()
+	_quick_play_result()
+	_network_result()
 	print("Match regressions: %d checks, %d failed" % [_checks, _failures.size()])
 	for failure in _failures:
 		push_error(failure)
@@ -57,6 +63,8 @@ func _fixture() -> TestMatch:
 		game.squads[team_index].append(pawn)
 		game.box.register(pawn.get_instance_id(), team_index, pawn.data)
 	game.ctx.teams = game.squads
+	game.hud.bind(game)
+	game.squads[1][0].position.x = 10.0
 	game.ctx.phase = MatchContext.Phase.LIVE
 	game._balance_run = true
 	return game
@@ -210,3 +218,94 @@ func _shot_clock_flight() -> void:
 	_check("released shot survives shot clock horn", horns[0] == 0 and clock.running)
 	clock.reset_shot_clock(14.0)
 	_check("rim reset resumes possession clock", not clock.shot_in_flight and clock.shot_clock == 14.0)
+
+
+func _rim_clock_once() -> void:
+	var game := _fixture()
+	_release(game)
+	game._on_rim_contact()
+	game.clock.shot_clock = 13.5
+	game._on_rim_contact()
+	_check("rattling on the rim does not keep restoring time", game.clock.shot_clock == 13.5)
+	game.free()
+
+
+func _free_throw_inputs() -> void:
+	var game := _fixture()
+	var shooter: PlayerPawn = game.squads[0][0]
+	shooter.teammates.assign(game.squads[1])
+	game._begin_free_throws(shooter, 1)
+	shooter.intent.pass_pressed = true
+	shooter._offence_inputs()
+	_check("free throw cannot turn into a pass", shooter.state == PlayerPawn.State.LOCOMOTION)
+	game.free()
+
+
+func _release_sequence() -> void:
+	var game := _fixture()
+	var shooter: PlayerPawn = game.squads[0][0]
+	shooter.take_ball(game.ball)
+	shooter.is_user_controlled = true
+	shooter._enter(PlayerPawn.State.SHOOT)
+	shooter.state_time = 0.5
+	shooter.shot_charge = 0.6
+	shooter.intent.shoot_released = true
+	shooter._tick_shoot(0.01)
+	var charge := shooter.shot_charge
+	_check("input release stages the arm extension", game.ball.holder == shooter and shooter._release_delay > 0.0)
+	shooter.intent.clear_edges()
+	shooter._tick_shoot(PlayerPawn.RELEASE_EXTENSION)
+	_check("extension preserves the chosen timing", is_equal_approx(shooter.shot_charge, charge))
+	_check("release queues after pose update", shooter._queued_release == "shot")
+	shooter._drive_animator(PlayerPawn.RELEASE_EXTENSION)
+	shooter._update_ball_anchor(0.0)
+	var from := shooter.ball_anchor.global_position
+	shooter._release_shot(false)
+	_check("shot starts at the animated hand", game.ball.global_position.distance_to(from) < 0.001)
+	_check("release clears the holder", game.ball.holder == null and not shooter.has_ball)
+	shooter.cancel_action()
+	_check("cancel discards queued callbacks", shooter._queued_release.is_empty() and shooter._release_delay < 0.0)
+	game.free()
+
+
+func _quick_play_result() -> void:
+	var game := _fixture()
+	Game.league = {}
+	game._finish()
+	_check("quick play carries its team identity into results", Game.last_box_score["home_team"]["abbr"] == game.setup.home["abbr"])
+	game.free()
+
+
+func _network_result() -> void:
+	var game := _fixture()
+	var sync := MatchSync.new()
+	sync.match_scene = game
+	game.add_child(sync)
+	var payload := {"home_team": game.setup.home, "away_team": game.setup.away,
+		"home": 0, "away": 16, "home_score": 2, "away_score": 0,
+		"season_day": -1, "box": {"players": game.box.players.duplicate(true),
+			"team_points": [2, 0], "quarter_points": [[2], [0]]}}
+	sync._receive_final(payload)
+	payload["box"]["team_points"] = [99, 99]
+	sync._receive_final(payload)
+	_check("client final score is delivered once", game.box.team_points == [2, 0])
+	_check("client has a usable box score", Game.last_box_score["box"] is BoxScore)
+	_check("client shows the final action", not game.hud._final.is_empty())
+	game.free()
+
+
+func _ai_gather() -> void:
+	var game := _fixture()
+	var shooter: PlayerPawn = game.squads[0][0]
+	shooter.take_ball(game.ball)
+	shooter.state = PlayerPawn.State.SHOOT
+	shooter.shot_charge = 0.3
+	var ai := TeamAI.new(0, 0, 33)
+	ai.pawns.assign(game.squads[0])
+	ai._decision_time = 0.15
+	ai.tick(1.0 / 60.0, game.ctx)
+	_check("AI keeps gathering between decisions", shooter.intent.shoot_held)
+	shooter.shot_charge = 0.7
+	ai.tick(1.0 / 60.0, game.ctx)
+	_check("AI releases after gathering", not shooter.intent.shoot_held)
+	game.free()

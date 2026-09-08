@@ -36,6 +36,8 @@ var _values: Dictionary = DEFAULTS.duplicate(true)
 
 func _ready() -> void:
 	_register_actions()
+	Input.joy_connection_changed.connect(_assign_primary_pad)
+	_assign_primary_pad(0, true)
 	load_from_disk()
 	apply_window()
 
@@ -157,3 +159,16 @@ func _add_stick_axis(action: String, axis: JoyAxis, value: float) -> void:
 	ev.axis = axis
 	ev.axis_value = value
 	InputMap.action_add_event(action, ev)
+
+
+func _assign_primary_pad(_device: int, _connected: bool) -> void:
+	var pads := Input.get_connected_joypads()
+	var primary := pads[0] if not pads.is_empty() else 0
+	for action in ACTION_KEYS:
+		if action == "pause":
+			continue
+		for event in InputMap.action_get_events(action):
+			if event is InputEventJoypadButton or event is InputEventJoypadMotion:
+				InputMap.action_erase_event(action, event)
+				event.device = primary
+				InputMap.action_add_event(action, event)

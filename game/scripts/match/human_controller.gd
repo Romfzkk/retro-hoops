@@ -2,7 +2,7 @@ class_name HumanController
 extends RefCounted
 
 # Maps one player's input device onto whichever pawn they currently control.
-# Player one reads the action map (keyboard or any pad); player two reads a
+# Player one reads the action map (keyboard or the first pad); player two reads a
 # specific pad directly so both can play on one screen.
 
 enum Device { ACTIONS, PAD, REMOTE }
@@ -44,6 +44,9 @@ func tick(delta: float, ctx: MatchContext) -> void:
 	intent.reset()
 	if device == Device.REMOTE:
 		_copy_remote(intent)
+		if intent.switch_pressed and ctx.is_live() and _switch_cooldown <= 0.0:
+			_switch_cooldown = SWITCH_COOLDOWN
+			_switch_to_nearest(ctx)
 		return
 	intent.move = _stick()
 	intent.aim = intent.move
@@ -53,8 +56,9 @@ func tick(delta: float, ctx: MatchContext) -> void:
 	intent.shoot_released = _released("shoot")
 	intent.pass_pressed = _pressed("pass_ball")
 	intent.special_pressed = _pressed("special")
+	intent.switch_pressed = _pressed("switch_player")
 
-	if ctx.is_live() and _pressed("switch_player") and _switch_cooldown <= 0.0:
+	if ctx.is_live() and intent.switch_pressed and _switch_cooldown <= 0.0:
 		_switch_cooldown = SWITCH_COOLDOWN
 		_switch_to_nearest(ctx)
 	_remember(intent)
@@ -71,6 +75,7 @@ func _copy_remote(intent: PlayerIntent) -> void:
 	intent.shoot_released = source.shoot_released
 	intent.pass_pressed = source.pass_pressed
 	intent.special_pressed = source.special_pressed
+	intent.switch_pressed = source.switch_pressed
 	source.clear_edges()
 
 
@@ -128,8 +133,11 @@ func _stick() -> Vector2:
 		return _touch.move_vector()
 	if device == Device.ACTIONS:
 		return Input.get_vector("move_left", "move_right", "move_up", "move_down")
-	var raw := Vector2(Input.get_joy_axis(pad_id, JOY_AXIS_LEFT_X),
-		Input.get_joy_axis(pad_id, JOY_AXIS_LEFT_Y))
+	var actual := _connected_pad()
+	if actual < 0:
+		return Vector2.ZERO
+	var raw := Vector2(Input.get_joy_axis(actual, JOY_AXIS_LEFT_X),
+		Input.get_joy_axis(actual, JOY_AXIS_LEFT_Y))
 	return raw if raw.length() > STICK_DEADZONE else Vector2.ZERO
 
 
@@ -165,9 +173,13 @@ func _sample_pad() -> void:
 	if device != Device.PAD:
 		return
 	_pad_previous = _pad_state.duplicate()
+	var actual := _connected_pad()
 	for action in ["shoot", "pass_ball", "special", "switch_player", "sprint"]:
-		_pad_state[action] = Input.get_joy_axis(pad_id, JOY_AXIS_TRIGGER_RIGHT) > 0.3 \
-			if action == "sprint" else Input.is_joy_button_pressed(pad_id, _pad_button(action))
+		if actual < 0:
+			_pad_state[action] = false
+		else:
+			_pad_state[action] = Input.get_joy_axis(actual, JOY_AXIS_TRIGGER_RIGHT) > 0.3 \
+				if action == "sprint" else Input.is_joy_button_pressed(actual, _pad_button(action))
 
 
 func _pad_edge(action: String, wanted_press: bool) -> bool:
@@ -184,3 +196,8 @@ func _pad_button(action: String) -> JoyButton:
 		"switch_player": return JOY_BUTTON_Y
 		"sprint": return JOY_BUTTON_RIGHT_SHOULDER
 	return JOY_BUTTON_A
+
+
+func _connected_pad() -> int:
+	var pads := Input.get_connected_joypads()
+	return pads[pad_id] if pad_id < pads.size() else -1
