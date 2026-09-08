@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Import fresh class names, then run a scene and optionally capture a frame.
-# usage: run.sh <scene> [png-path] [extra args...]
-set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-GODOT="$ROOT/tools/Godot_v4.7.2-stable_win64_console.exe"
-SCENE="${1:?scene required}"
-SHOT="${2:-}"
-shift 2 2>/dev/null || shift $#
-
-"$GODOT" --headless --path "$ROOT/game" --import >/dev/null 2>&1
-
-ARGS=(--path "$ROOT/game" --resolution 1600x900 "$SCENE" --)
-[ -n "$SHOT" ] && ARGS+=(--shot "$SHOT")
-ARGS+=("$@")
-
-timeout 90 "$GODOT" "${ARGS[@]}" 2>&1 \
-  | grep -viE "^$|vulkan api|godot engine v|https://godotengine|NVIDIA|Unreferenced static string"
+# Usage: run.sh <scene> [capture.png] [scene flags...]
+set -euo pipefail
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+godot_bin="${GODOT_BIN:-godot}"
+scene="${1:?scene required}"
+shift
+capture=""
+if (( $# > 0 )) && [[ "$1" != --* ]]; then
+    capture="$1"
+    shift
+fi
+if ! command -v "$godot_bin" >/dev/null; then
+    echo "Godot is missing. Set GODOT_BIN to the Godot 4.7.2 executable." >&2
+    exit 1
+fi
+"$godot_bin" --headless --path "$project_root/game" --import
+args=(--path "$project_root/game" --resolution 1600x900 "$scene" --)
+if [[ -n "$capture" ]]; then
+    args+=(--shot "$capture")
+fi
+exec "$godot_bin" "${args[@]}" "$@"
