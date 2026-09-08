@@ -35,7 +35,8 @@ These failures do not establish whether any of the engine regressions pass.
 New regression cases cover exclusive possession, pass expiry, free-throw
 accounting and sequencing, foul/rebound ordering, buzzer shots, duplicate
 completion, a ball stuck above the rim, interception credit, rim-plane
-crossings, shot-clock suspension, CPU gather timing, pose-before-release
+crossings, grounded versus airborne boundary calls, shot-clock suspension,
+CPU gather timing, pose-before-release
 ordering, Quick Play results and client final-result delivery. Rig checks use
 one imported player to inspect neutral limb directions, anchors, measurements,
 normalized skin weights and transformed bounds. UI checks cover input edges,

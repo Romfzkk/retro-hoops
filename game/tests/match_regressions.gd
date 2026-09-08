@@ -25,6 +25,8 @@ func _ready() -> void:
 	_ai_gather()
 	_quick_play_result()
 	_network_result()
+	_airborne_boundary()
+	await _held_boundary()
 	print("Match regressions: %d checks, %d failed" % [_checks, _failures.size()])
 	for failure in _failures:
 		push_error(failure)
@@ -322,4 +324,36 @@ func _hung_buzzer_shot() -> void:
 	game._pending_shot["age"] = game.SHOT_RESOLUTION_LIMIT
 	game._physics_process(1.0 / 60.0)
 	_check("ball stuck above rim cannot hold the final horn forever", game.ctx.phase == MatchContext.Phase.OVER)
+	game.free()
+
+
+func _airborne_boundary() -> void:
+	var game := _fixture()
+	game.ball.go_loose()
+	game.ball.global_position = Vector3(CourtMetrics.HALF_LENGTH + 1.0, 4.0, 0.0)
+	game.ball.linear_velocity = Vector3(-2.0, -3.0, 0.0)
+	game._check_out_of_bounds()
+	_check("airborne boundary crossing remains live", game.ctx.is_live())
+	game.ball.global_position.y = CourtMetrics.BALL_RADIUS
+	game._check_out_of_bounds()
+	_check("outside floor contact ends the possession", game.ctx.phase == MatchContext.Phase.DEAD)
+	game.free()
+
+
+func _held_boundary() -> void:
+	var game := _fixture()
+	ArenaBuilder.build_collision_only(game)
+	var handler: PlayerPawn = game.squads[0][0]
+	handler.global_position = Vector3(CourtMetrics.HALF_LENGTH + 1.0, 0.02, 0.0)
+	for frame in 3:
+		await get_tree().physics_frame
+		handler.velocity = Vector3.DOWN * 2.0
+		handler.move_and_slide()
+	_check("boundary fixture is grounded", handler.is_on_floor())
+	handler.take_ball(game.ball)
+	game._update_context()
+	game._check_out_of_bounds()
+	game._check_out_of_bounds()
+	_check("grounded carrier cannot dribble outside", game.ctx.phase == MatchContext.Phase.DEAD and game.ctx.possession == 1)
+	_check("boundary turnover counts once", game.box.players[handler.get_instance_id()]["to"] == 1)
 	game.free()

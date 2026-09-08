@@ -524,19 +524,26 @@ func _resolve_miss() -> void:
 
 
 func _check_out_of_bounds() -> void:
-	var position := ball.global_position
+	if not ctx.is_live() or _period_pending:
+		return
+	var carrier := ball.holder as PlayerPawn
+	var position := carrier.global_position if carrier != null else ball.global_position
 	var outside := absf(position.x) > CourtMetrics.HALF_LENGTH + OUT_OF_BOUNDS_MARGIN \
 		or absf(position.z) > CourtMetrics.HALF_WIDTH + OUT_OF_BOUNDS_MARGIN
-	if not outside or ball.state == Ball.State.HELD:
+	if not outside:
 		return
-	# Only whistle it once the ball is actually down, so a shot from the corner
-	# that drifts over the line mid-flight still counts.
-	if position.y > 0.6 and ball.linear_velocity.y > -0.5:
+	if carrier != null:
+		if not carrier.is_on_floor():
+			return
+	elif position.y > CourtMetrics.BALL_RADIUS + 0.05:
+		# Crossing the boundary in the air is legal until the ball touches down.
 		return
 	_resolve_miss()
 	if not ctx.is_live():
 		return
 	var to_team := 1 - _last_touch_team()
+	if carrier != null:
+		box.add(carrier.get_instance_id(), "to")
 	events["out_of_bounds"] = int(events["out_of_bounds"]) + 1
 	Sound.play("whistle", -6.0)
 	hud.announce("OUT OF BOUNDS", false)
