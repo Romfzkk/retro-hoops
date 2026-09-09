@@ -61,6 +61,21 @@ func _ready() -> void:
 		{"at": 14.2, "do": "tap", "action": "shoot"},
 		{"at": 14.4, "do": "release", "action": "drive"},
 
+		{"at": 15.0, "do": "note", "text": "--- crossover with the ball ---"},
+		{"at": 15.0, "do": "give_ball"},
+		{"at": 15.2, "do": "mark_up"},
+		{"at": 15.3, "do": "tap", "action": "special"},
+		{"at": 15.8, "do": "mark_up"},
+		{"at": 15.9, "do": "tap", "action": "special"},
+		{"at": 16.3, "do": "mark_up"},
+		{"at": 16.4, "do": "tap", "action": "special"},
+		{"at": 16.8, "do": "mark_up"},
+		{"at": 16.9, "do": "tap", "action": "special"},
+		{"at": 17.3, "do": "mark_up"},
+		{"at": 17.4, "do": "tap", "action": "special"},
+		{"at": 17.8, "do": "mark_up"},
+		{"at": 17.9, "do": "tap", "action": "special"},
+
 		{"at": 16.0, "do": "note", "text": "--- mid range, clean release (5.0m) ---"},
 		{"at": 16.0, "do": "give_ball"},
 		{"at": 16.1, "do": "face_rim", "at_m": 5.0},
@@ -97,6 +112,9 @@ func _ready() -> void:
 		hoop.scored.connect(func(points): _log.append(
 			"  t=%5.2f  >>> SCORED %d" % [_elapsed, points]))
 	for pawn in _all_pawns():
+		pawn.crossed_over.connect(func(handler, beaten, severity): _log.append(
+			"  t=%5.2f  CROSSOVER %s beat %s (severity %.2f)" % [_elapsed,
+				handler.data["ln"], beaten.data["ln"], severity]))
 		pawn.shot_released.connect(_on_shot)
 		pawn.ball_passed.connect(_on_pass)
 		pawn.ball_gathered.connect(_on_gather)
@@ -150,6 +168,22 @@ func _run(entry: Dictionary) -> void:
 				pawn.velocity = Vector3.ZERO
 				pawn.global_position = Vector3(
 					rim.x - CourtMetrics.attack_sign(pawn.basket) * away, 0.0, rim.z)
+		"mark_up":
+			# Puts the nearest opponent right in front, which is the only situation
+			# a crossover has anything to say about.
+			if pawn != null:
+				var rival: PlayerPawn = match_scene.squads[1 - pawn.team_index][0]
+				rival.velocity = Vector3.ZERO
+				rival.global_position = pawn.global_position + pawn.facing() * 1.15
+				# The probe is checking that the button reaches the move, not whether
+				# an even contest happens to go one way, so the contest is loaded.
+				pawn.data["hnd"] = 99
+				pawn.data["acc"] = 99
+				rival.data["def"] = 25
+				rival.data["acc"] = 25
+				_log.append("  [defender placed: marker=%s floor=%s gathered=%s state=%s]" % [
+					pawn.has_marker(), pawn.is_on_floor(), pawn.has_ball_gathered(),
+					_state_name(pawn.state)])
 		"report":
 			_report()
 
