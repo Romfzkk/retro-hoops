@@ -16,6 +16,7 @@ var _failures: Array[String] = []
 func _ready() -> void:
 	_ownership()
 	_backcourt_rules()
+	_crossover_outcome()
 	_pass_expiry()
 	_free_throw_scoring()
 	_foul_rebound()
@@ -145,6 +146,67 @@ func _backcourt_rules() -> void:
 	game.free()
 	second.free()
 	third.free()
+
+
+## The crossover contest. `try_crossover` gates on being grounded, which a
+## fixture with physics disabled can never be, so the outcome is exercised
+## through `shake` and the gating is left to play.
+func _crossover_outcome() -> void:
+	var game := _fixture()
+	var handler: PlayerPawn = game.squads[0][0]
+	var mark: PlayerPawn = game.squads[1][0]
+	handler.data["hnd"] = 99
+	handler.data["acc"] = 99
+	mark.data["def"] = 25
+	mark.data["acc"] = 25
+	handler.global_position = Vector3.ZERO
+
+	var beaten := 0
+	for attempt in 16:
+		mark._enter(PlayerPawn.State.LOCOMOTION)
+		mark.global_position = handler.facing() * 1.2
+		if handler.shake(mark) > 0.0:
+			beaten += 1
+			_check("being beaten leaves the defender recovering",
+				mark.state == PlayerPawn.State.STUMBLE)
+			break
+	_check("a handler beats a defender who cannot stay in front", beaten > 0)
+
+	var even := _fixture()
+	var solid: PlayerPawn = even.squads[0][0]
+	var wall: PlayerPawn = even.squads[1][0]
+	solid.data["hnd"] = 25
+	solid.data["acc"] = 25
+	wall.data["def"] = 99
+	wall.data["acc"] = 99
+	solid.global_position = Vector3.ZERO
+	var survived := 0
+	for attempt in 16:
+		wall._enter(PlayerPawn.State.LOCOMOTION)
+		wall.global_position = solid.facing() * 2.6
+		if solid.shake(wall) <= 0.0:
+			survived += 1
+	_check("a defender who can stay in front mostly does", survived >= 12)
+
+	# Severity has to mean something, or every shake is the same shake.
+	var quick := _fixture()
+	var star: PlayerPawn = quick.squads[0][0]
+	var cone: PlayerPawn = quick.squads[1][0]
+	star.data["hnd"] = 99
+	star.data["acc"] = 99
+	cone.data["def"] = 25
+	cone.data["acc"] = 25
+	star.global_position = Vector3.ZERO
+	cone.global_position = star.facing() * 1.0
+	cone.stumble(1.0)
+	var long_recovery := cone._stumble_time
+	cone.stumble(0.0)
+	_check("a worse beating takes longer to recover from",
+		long_recovery > cone._stumble_time)
+
+	game.free()
+	even.free()
+	quick.free()
 
 
 func _pass_expiry() -> void:

@@ -50,13 +50,19 @@ that this branch has produced a working build.
 | Sprint | Shift | Right trigger |
 | Shoot or jump to contest | Space | A |
 | Pass or attempt a steal | E | X |
-| Dunk modifier while driving and shooting | Q | B |
+| Crossover, or dunk modifier while driving and shooting | Q | B |
 | Switch defender | F | Y |
 | Pause or back | Esc | Start |
 
 Hold and release Shoot for a jumper. Timing, ratings, movement, fatigue and
 contests influence the launch. Close attempts become layups, or dunks when
 the approach and reach permit. Assisted shooting ignores release timing.
+
+Pressing Crossover on its own is a hard change of direction. Whether it beats
+the man in front is a contest between handle and footwork, and a defender who
+loses it is left recovering for longer the worse they were beaten. It costs
+stamina and has a short cooldown, so it is a move rather than a movement
+speed. Holding it while driving into a shot is still the dunk.
 Player one uses the keyboard or first connected pad. Player two uses the
 second connected pad. Phones show a touch stick and action buttons.
 

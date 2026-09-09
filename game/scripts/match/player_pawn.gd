@@ -5,6 +5,9 @@ extends CharacterBody3D
 
 signal shot_released(pawn: PlayerPawn, points: int, quality: float)
 signal ball_passed(pawn: PlayerPawn, target: PlayerPawn, kind: int)
+## Emitted when a change of direction beats the man in front. `severity` is 0
+## for a defender who recovers and 1 for one who is left on the floor.
+signal crossed_over(handler: PlayerPawn, beaten: PlayerPawn, severity: float)
 signal ball_gathered(pawn: PlayerPawn)
 signal dunked(pawn: PlayerPawn)
 signal steal_attempted(pawn: PlayerPawn, target: PlayerPawn)
@@ -45,6 +48,13 @@ const MIN_RELEASE_QUALITY := 0.30
 const RELEASE_EXTENSION := 0.08
 const STEAL_TIME := 0.42
 const STUMBLE_TIME := 0.55
+## A change of direction sharp enough to need answering. Cheap enough to use in
+## traffic, expensive enough that spamming it empties the tank.
+const CROSSOVER_COOLDOWN := 0.85
+const CROSSOVER_STAMINA := 0.055
+const CROSSOVER_PUSH := 5.6
+## How far in front a defender has to be to be put on skates by one.
+const CROSSOVER_RANGE := 2.9
 ## Take-off range. A dunk should be on from the edge of the paint, not
 ## only from under the rim.
 const DUNK_RANGE := 4.4
@@ -55,6 +65,10 @@ const DUNK_HANG := 0.95
 ## from standing, which is the single thing that made jumping read as wrong.
 const JUMP_WINDUP := 0.11
 const LAYUP_RANGE := 4.2
+## The ball is collected out of the dribble and carried for two steps before
+## the rise. Going up 0.12s after the button meant the gather never read as a
+## gather and a drive finished as a standing jump.
+const LAYUP_GATHER := 0.26
 ## Below this you go up with it whether or not you are running.
 const STANDING_LAYUP_RANGE := 2.3
 const DRIVE_SPEED := 1.2
@@ -113,6 +127,10 @@ var _rng := RandomNumberGenerator.new()
 var dunk_power := 0.0
 ## 0 to 1 while a jump is dipping before it leaves the floor.
 var gather := 0.0
+var _crossover_cooldown := 0.0
+## Which way the last crossover went, so the animation leans into it.
+var crossover_lean := 0.0
+var _stumble_time := STUMBLE_TIME
 var _jump_launched := false
 var _dribble_phase := 0.0
 var _last_bounce := 0
@@ -215,6 +233,8 @@ func _physics_process(delta: float) -> void:
 	state_time += delta
 	pickup_cooldown = maxf(0.0, pickup_cooldown - delta)
 	_tick_rally()
+	_crossover_cooldown = maxf(0.0, _crossover_cooldown - delta)
+	crossover_lean = move_toward(crossover_lean, 0.0, delta * 3.2)
 	_tick_dribble(delta)
 
 	match state:
@@ -323,6 +343,8 @@ func _offence_inputs() -> void:
 		_begin_shot_attempt()
 	elif intent.pass_pressed and not free_throw_attempt:
 		_begin_pass()
+	elif intent.special_pressed and not free_throw_attempt:
+		try_crossover()
 
 
 func _defence_inputs() -> void:
@@ -661,17 +683,18 @@ func _finish_dunk() -> void:
 
 func _tick_layup(delta: float) -> void:
 	var target := rim()
-	if state_time < 0.14:
-		_walk(delta, 0.85)
+	if state_time < LAYUP_GATHER:
+		# Momentum is the point of a drive, so the steps keep their speed.
+		_walk(delta, 0.95)
 	_face_point(target, delta, 16.0)
-	if state_time >= 0.12 and is_on_floor() and not _took_off:
+	if state_time >= LAYUP_GATHER and is_on_floor() and not _took_off:
 		_took_off = true
 		var flat := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
 		velocity = flat.normalized() * minf(flat.length() * 1.2, _max_speed * 0.8)
 		velocity.y = sqrt(2.0 * GRAVITY * jump_height() * 0.82)
 	if has_ball and velocity.y < 0.6 and not is_on_floor():
 		_queued_release = "layup"
-	if is_on_floor() and state_time > 0.4:
+	if is_on_floor() and state_time > LAYUP_GATHER + 0.4:
 		_enter(State.LOCOMOTION)
 
 
@@ -733,13 +756,89 @@ func _tick_steal(delta: float) -> void:
 		_enter(State.LOCOMOTION)
 
 
+## A hard change of direction. Whether it beats anyone is decided against the
+## defender actually in front, once, on the push - not continuously while the
+## handler jinks, which would turn one move into a stream of rolls.
+func try_crossover() -> bool:
+	if not has_ball or not is_on_floor() or has_ball_gathered():
+		return false
+	if _crossover_cooldown > 0.0 or stamina < CROSSOVER_STAMINA:
+		return false
+	var mark := _closest_marker()
+	_crossover_cooldown = CROSSOVER_COOLDOWN
+	stamina = maxf(0.0, stamina - CROSSOVER_STAMINA)
+
+	var across := _facing.cross(Vector3.UP).normalized()
+	var away := 1.0
+	if mark != null:
+		# Go the way the defender is not.
+		away = -signf(across.dot(mark.global_position - global_position))
+		if is_zero_approx(away):
+			away = 1.0
+	velocity += across * away * CROSSOVER_PUSH
+	ball_hand = away
+	crossover_lean = away
+	Sound.play("bounce", -8.0, 0.86)
+
+	if mark != null:
+		shake(mark)
+	return true
+
+
+## The contest itself, separate from whether the move is available. Returns how
+## badly the defender was beaten, 0 if they stayed in front.
+func shake(mark: PlayerPawn) -> float:
+	var handle := float(data["hnd"]) * 0.62 + float(data["acc"]) * 0.38
+	var footwork := float(mark.data["def"]) * 0.58 + float(mark.data["acc"]) * 0.42
+	# Closer defenders are more committed and so easier to leave behind.
+	var closeness := 1.0 - clampf(global_position.distance_to(mark.global_position)
+		/ CROSSOVER_RANGE, 0.0, 1.0)
+	var edge := (handle - footwork) / 99.0 + closeness * 0.22
+	var severity := clampf(edge + _rng.randfn(0.0, 0.16), 0.0, 1.0)
+	if severity <= 0.34:
+		return 0.0
+	mark.stumble(severity)
+	crossed_over.emit(self, mark, severity)
+	return severity
+
+
+## Whether anyone is close enough in front to be worth shaking. Shares the
+## definition with the move itself, so the AI is not judging a different thing
+## from the one that decides the outcome.
+func has_marker() -> bool:
+	return _closest_marker() != null
+
+
+## The defender this handler actually has to beat: nearest, in front, and close
+## enough to be committed to stopping the drive.
+func _closest_marker() -> PlayerPawn:
+	var best: PlayerPawn = null
+	var best_distance := CROSSOVER_RANGE
+	for defender in opponents:
+		if defender.state == State.STUMBLE:
+			continue
+		var offset := defender.global_position - global_position
+		offset.y = 0.0
+		var distance := offset.length()
+		if distance > best_distance or distance < 0.01:
+			continue
+		if _facing.dot(offset / distance) < 0.15:
+			continue
+		best = defender
+		best_distance = distance
+	return best
+
+
 func _tick_stumble(delta: float) -> void:
 	_walk(delta, 0.15)
-	if state_time > STUMBLE_TIME:
+	if state_time > _stumble_time:
 		_enter(State.LOCOMOTION)
 
 
-func stumble() -> void:
+## `severity` stretches how long the recovery takes, so being turned around is
+## not the same as being put on the floor.
+func stumble(severity := 0.0) -> void:
+	_stumble_time = STUMBLE_TIME * (1.0 + clampf(severity, 0.0, 1.0) * 1.35)
 	_enter(State.STUMBLE)
 
 
@@ -950,7 +1049,8 @@ func _action_progress() -> float:
 		State.DUNK:
 			return clampf(state_time / 0.82, 0.0, 1.0)
 		State.LAYUP:
-			return clampf(state_time / 0.55, 0.0, 1.0)
+			# The arm stays down through the gather and rises off the step.
+			return clampf((state_time - LAYUP_GATHER) / 0.55, 0.0, 1.0)
 		State.JUMP:
 			return clampf(state_time / 0.35, 0.0, 1.0)
 		State.STEAL:

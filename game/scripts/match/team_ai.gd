@@ -13,6 +13,9 @@ const CUT_DURATION := 1.6
 ## Seconds of shot clock to burn before the offence starts hunting a shot.
 const PATIENCE := 4.0
 const SHOT_APPETITE := 0.40
+## How readily a marked handler tries to shake the man in front. The move has
+## its own cooldown, so this mostly sets how soon the first attempt comes.
+const CROSSOVER_APPETITE := 0.35
 const PASS_APPETITE := 0.30
 ## Rolled once per decision, not once per frame.
 const REACH_IN_CHANCE := 0.05
@@ -139,6 +142,13 @@ func _drive_decision(pawn: PlayerPawn, ctx: MatchContext, refresh: bool) -> void
 			pawn.intent.special_pressed = at_rim and pawn.can_dunk() 				and contest < OPEN_CONTEST
 			if at_rim:
 				_steer(pawn, rim, 1.0, true)
+			return
+
+		# Somebody is in the way and there is room to go round them. Handle
+		# decides whether it comes off, so this only picks the moment.
+		if pawn.has_marker() and distance > PlayerPawn.DUNK_RANGE \
+				and _rng.randf() < CROSSOVER_APPETITE * float(pawn.data["hnd"]) / 99.0:
+			pawn.intent.special_pressed = true
 			return
 
 		var receiver := _best_pass(pawn, ctx)

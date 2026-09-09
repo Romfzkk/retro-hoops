@@ -183,6 +183,7 @@ func _spawn_squads() -> void:
 			box.register(pawn.get_instance_id(), team_index, roster[slot])
 			pawn.shot_released.connect(_on_shot_released)
 			pawn.ball_passed.connect(_on_ball_passed)
+			pawn.crossed_over.connect(_on_crossed_over)
 			pawn.dunked.connect(_on_dunk)
 			pawn.steal_attempted.connect(_on_steal_attempt)
 
@@ -909,6 +910,21 @@ func _maybe_shooting_foul(shooter: PlayerPawn, points: int) -> void:
 	if _rng.randf() >= clampf(0.05 + clumsiness * 0.13, 0.02, 0.20):
 		return
 	_call_foul(nearest, shooter, points)
+
+
+## A defender put on skates is worth noticing. The reaction scales with how
+## badly, so a shoulder shrug and an ankle breaker do not land the same.
+func _on_crossed_over(handler: PlayerPawn, beaten: PlayerPawn, severity: float) -> void:
+	if not ctx.is_live() or _period_pending:
+		return
+	events["crossovers"] = int(events.get("crossovers", 0)) + 1
+	Sound.react(0.35 + severity * 0.5)
+	if severity < 0.68:
+		return
+	events["ankles"] = int(events.get("ankles", 0)) + 1
+	camera.shake(0.25 + severity * 0.45)
+	Sound.play("cheer", -9.0 + severity * 5.0)
+	hud.announce("ANKLES", severity > 0.85)
 
 
 func _on_ball_passed(passer: PlayerPawn, target: PlayerPawn, kind: int) -> void:
