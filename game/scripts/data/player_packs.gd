@@ -69,9 +69,17 @@ static func apply_enabled(lg: Dictionary) -> Array[String]:
 
 
 static func apply(lg: Dictionary, pack: Dictionary) -> void:
+	var matched_none := 0
 	for entry in pack["teams"]:
 		var team := _find_team(lg, entry)
 		if team.is_empty():
+			# Silence here is why a whole pack could look like it simply did not
+			# load: abbr_match names the existing team to replace, so a code that
+			# matches nothing quietly skips the entry.
+			push_warning("Pack %s: no team matches abbr_match %s" % [
+				pack.get("id", "?"),
+				entry.get("abbr_match", entry.get("abbr", "?"))])
+			matched_none += 1
 			continue
 		for key in ["city", "name", "abbr", "primary", "secondary", "accent"]:
 			if entry.has(key):
@@ -91,6 +99,10 @@ static func apply(lg: Dictionary, pack: Dictionary) -> void:
 		if filled > 0:
 			push_warning("Pack %s left %s with too few players; filled %d slots"
 				% [pack.get("id", "?"), team["abbr"], filled])
+
+
+	if matched_none == (pack["teams"] as Array).size():
+		push_error("Pack %s changed nothing: none of its abbr_match codes name a team in this league" % pack.get("id", "?"))
 
 
 static func _find_team(lg: Dictionary, entry: Dictionary) -> Dictionary:

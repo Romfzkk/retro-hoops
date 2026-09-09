@@ -61,6 +61,10 @@ var match_difficulty := 1
 var has_ball := false
 var actions_enabled := true
 var movement_enabled := true
+## Where this player is jogging back to between whistles. Set instead of
+## teleporting, so a restart is something you watch rather than something that
+## happens to the court while you blink.
+var rally_to := Vector3.INF
 var free_throw_attempt := false
 var _took_off := false
 var _release_delay := -1.0
@@ -188,6 +192,7 @@ func _physics_process(delta: float) -> void:
 		return
 	state_time += delta
 	pickup_cooldown = maxf(0.0, pickup_cooldown - delta)
+	_tick_rally()
 	_tick_dribble(delta)
 
 	match state:
@@ -665,8 +670,26 @@ func _ball_carrier_in_reach() -> PlayerPawn:
 	return null
 
 
+# Steers toward the spot this player is due back at. Drives `intent` rather
+# than the body, so the same locomotion, turning and animation apply as in open
+# play and the run back is indistinguishable from any other.
+func _tick_rally() -> void:
+	if not rally_to.is_finite():
+		return
+	var offset := rally_to - global_position
+	offset.y = 0.0
+	if offset.length() < 0.45:
+		rally_to = Vector3.INF
+		intent.move = Vector2.ZERO
+		return
+	var wish := offset.normalized()
+	intent.move = Vector2(wish.x, wish.z)
+	intent.sprint = offset.length() > 6.0
+
+
 func _walk(delta: float, control: float) -> void:
-	var wish := Vector3(intent.move.x, 0.0, intent.move.y) if movement_enabled else Vector3.ZERO
+	var free_to_move := movement_enabled or rally_to.is_finite()
+	var wish := Vector3(intent.move.x, 0.0, intent.move.y) if free_to_move else Vector3.ZERO
 	if wish.length() > 1.0:
 		wish = wish.normalized()
 	var sprinting := intent.sprint and stamina > 0.05 and not has_ball_gathered()

@@ -6,6 +6,9 @@ extends Node3D
 signal finished(result: Dictionary)
 
 const INBOUND_PAUSE := 1.1
+## Beyond this a player is too far out of position to jog back before the
+## restart, and is placed instead.
+const RALLY_LIMIT := 26.0
 const TIPOFF_SET := 1.3
 ## Puts the apex around 3.9m, above a standing reach but inside a jump.
 const TIPOFF_TOSS := 6.3
@@ -54,6 +57,7 @@ var _verbose := false
 
 var _pending_shot := {}
 var _period_pending := false
+var _period_hold := 0.0
 var _rebound_team := -1
 var _rim_clock_reset := false
 var _phase_timer := 0.0
@@ -138,6 +142,11 @@ func _fill_exhibition_setup() -> void:
 	var away_id := int(away_arg) if not away_arg.is_empty() else 16
 	setup.home = teams[posmod(home_id, teams.size())]
 	setup.away = teams[posmod(away_id, teams.size())]
+	# `--quarter` shortens periods so a headless run reaches a break, and the
+	# end of a match, in seconds rather than in real minutes.
+	var quarter_arg := FrameCapture.argument("--quarter")
+	if not quarter_arg.is_empty():
+		setup.quarter_seconds = maxi(int(quarter_arg), 2)
 
 
 func _spawn_squads() -> void:
@@ -287,6 +296,7 @@ func _physics_process(delta: float) -> void:
 		return
 	_update_context()
 	_set_play_permissions()
+	_settle_pending_period(delta)
 
 	if _phase_timer > 0.0:
 		_phase_timer -= delta
@@ -954,6 +964,25 @@ func _on_quarter_expired(_quarter: int) -> void:
 	_complete_period()
 
 
+# A period held open for a shot in flight has to close whatever the ball does
+# next. The only route to _complete_period ran inside the live branch, so a
+# buzzer beater that resolved into a dead ball left the period pending with
+# nothing able to end it, and the match sat on the break banner for good.
+# _pending_shot is cleared in seven places and only four of them finished the
+# period, so this watches the state rather than trusting every one of them.
+func _settle_pending_period(delta: float) -> void:
+	if not _period_pending or ctx.phase == MatchContext.Phase.OVER:
+		_period_hold = 0.0
+		return
+	# Free throws legitimately hold a period open until they are taken.
+	if ctx.phase == MatchContext.Phase.FREE_THROW:
+		_period_hold = 0.0
+		return
+	_period_hold += delta
+	if _pending_shot.is_empty() or _period_hold >= SHOT_RESOLUTION_LIMIT:
+		_complete_period()
+
+
 func _complete_period() -> void:
 	if ctx.phase == MatchContext.Phase.OVER:
 		return
@@ -1112,6 +1141,9 @@ func _resume_play() -> void:
 		_phase_timer = INBOUND_PAUSE
 		_resume_phase = MatchContext.Phase.LIVE
 		return
+	for squad in squads:
+		for pawn: PlayerPawn in squad:
+			pawn.rally_to = Vector3.INF
 	ball.set_paused(false)
 	ctx.phase = MatchContext.Phase.LIVE
 	clock.reset_shot_clock()
@@ -1119,19 +1151,27 @@ func _resume_play() -> void:
 
 
 func _position_for_inbound(to_team: int, from_baseline := false) -> void:
+	var handler: PlayerPawn = squads[to_team][0]
+	for pawn: PlayerPawn in squads[to_team]:
+		if int(pawn.data["pos"]) == League.Pos.PG:
+			handler = pawn
+			break
+
 	for team_index in 2:
 		for pawn: PlayerPawn in squads[team_index]:
 			pawn.velocity = Vector3.ZERO
 			pawn.cancel_action()
 			pawn.free_throw_attempt = false
 			pawn.lose_ball()
-			pawn.global_position = _formation_spot(pawn, team_index, to_team,
-				from_baseline)
-	var handler: PlayerPawn = squads[to_team][0]
-	for pawn: PlayerPawn in squads[to_team]:
-		if int(pawn.data["pos"]) == League.Pos.PG:
-			handler = pawn
-			break
+			pawn.rally_to = Vector3.INF
+			var spot := _formation_spot(pawn, team_index, to_team, from_baseline)
+			# Only whoever is taking the ball out is placed. Everyone else runs
+			# back to their spot, so a restart is continuous play rather than
+			# the whole court blinking into a new arrangement.
+			if pawn == handler or not from_baseline 					or pawn.global_position.distance_to(spot) > RALLY_LIMIT:
+				pawn.global_position = spot
+			else:
+				pawn.rally_to = spot
 
 	ball.set_paused(false)
 	handler.take_ball(ball)
