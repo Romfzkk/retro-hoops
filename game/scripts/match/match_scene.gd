@@ -8,6 +8,18 @@ signal finished(result: Dictionary)
 const INBOUND_PAUSE := 1.1
 ## Beyond this a player is too far out of position to jog back before the
 ## restart, and is placed instead.
+## Box score counters per pass kind, so the sim can show what the AI actually
+## throws rather than one undifferentiated total.
+const PASS_EVENT := {
+	PlayerPawn.PassKind.BOUNCE: "bounce_passes",
+	PlayerPawn.PassKind.LOB: "lobs",
+	PlayerPawn.PassKind.OUTLET: "outlets",
+}
+## Seconds to get the ball over halfway before it is a turnover.
+const BACKCOURT_LIMIT := 8.0
+## How far past halfway the ball has to go before the frontcourt counts as
+## established, so a carrier straddling the line does not flicker between them.
+const MIDCOURT_MARGIN := 0.45
 const RALLY_LIMIT := 26.0
 const TIPOFF_SET := 1.3
 ## Puts the apex around 3.9m, above a standing reach but inside a jump.
@@ -58,6 +70,10 @@ var _verbose := false
 var _pending_shot := {}
 var _period_pending := false
 var _period_hold := 0.0
+## Whether this possession has got the ball over halfway yet, and how long it
+## has been trying. Both reset when the ball changes hands.
+var _frontcourt := false
+var _backcourt_time := 0.0
 var _rebound_team := -1
 var _rim_clock_reset := false
 var _phase_timer := 0.0
@@ -297,6 +313,7 @@ func _physics_process(delta: float) -> void:
 	_update_context()
 	_set_play_permissions()
 	_settle_pending_period(delta)
+	_tick_backcourt(delta)
 
 	if _phase_timer > 0.0:
 		_phase_timer -= delta
@@ -455,6 +472,10 @@ func _award_possession(pawn: PlayerPawn) -> void:
 		events["loose_pickups"] += 1
 	pawn.take_ball(ball)
 	ctx.carrier = pawn
+	if pawn.team_index != ctx.possession:
+		# A new possession starts behind halfway until it proves otherwise.
+		_frontcourt = false
+		_backcourt_time = 0.0
 	ctx.possession = pawn.team_index
 	ctx.phase = MatchContext.Phase.LIVE
 	clock.running = true
@@ -890,10 +911,22 @@ func _maybe_shooting_foul(shooter: PlayerPawn, points: int) -> void:
 	_call_foul(nearest, shooter, points)
 
 
-func _on_ball_passed(passer: PlayerPawn, target: PlayerPawn) -> void:
+func _on_ball_passed(passer: PlayerPawn, target: PlayerPawn, kind: int) -> void:
 	if not ctx.is_live() or _period_pending:
 		return
 	events["passes"] = int(events["passes"]) + 1
+	var counter: String = PASS_EVENT.get(kind, "")
+	if counter != "":
+		events[counter] = int(events.get(counter, 0)) + 1
+	# Each delivery sounds like itself: a bounce off the floor, a lob that
+	# hangs, the rest off the hands.
+	match kind:
+		PlayerPawn.PassKind.BOUNCE:
+			Sound.play("bounce", -9.0, 1.04)
+		PlayerPawn.PassKind.LOB:
+			Sound.play("swish", -16.0, 1.25)
+		_:
+			Sound.play("bounce", -17.0, 1.35)
 	box.note_pass(passer.get_instance_id(), target.get_instance_id(), _elapsed)
 
 
@@ -939,6 +972,44 @@ func _on_dunk(pawn: PlayerPawn) -> void:
 	Sound.play("cheer", -4.0 + power * 6.0)
 	Sound.react(0.85 + power * 0.15)
 	hud.announce("SLAM", true)
+
+
+## The eight second count and over and back, which are the two rules that make
+## the backcourt somewhere you have to leave rather than somewhere to hide.
+##
+## Both are judged on the carrier rather than the ball: a pass may travel back
+## over halfway legally, and it is receiving it there that is the offence.
+func _tick_backcourt(delta: float) -> void:
+	if not ctx.is_live() or _period_pending \
+			or ctx.phase == MatchContext.Phase.FREE_THROW:
+		return
+	var carrier := ctx.carrier
+	if carrier == null:
+		return
+	var attack := CourtMetrics.attack_sign(ctx.possession)
+	var forward := carrier.global_position.x * attack
+
+	if not _frontcourt:
+		if forward > MIDCOURT_MARGIN:
+			_frontcourt = true
+			_backcourt_time = 0.0
+			return
+		_backcourt_time += delta
+		if _backcourt_time >= BACKCOURT_LIMIT:
+			_backcourt_violation("EIGHT SECONDS")
+		return
+
+	if forward < -MIDCOURT_MARGIN:
+		_backcourt_violation("BACKCOURT")
+
+
+func _backcourt_violation(label: String) -> void:
+	events["backcourt"] = int(events.get("backcourt", 0)) + 1
+	Sound.play("whistle", -6.0)
+	hud.announce(label, false)
+	_resolve_miss()
+	if ctx.is_live():
+		_dead_ball(1 - ctx.possession, INBOUND_PAUSE * 0.8)
 
 
 func _on_shot_clock_expired() -> void:
@@ -1176,6 +1247,8 @@ func _position_for_inbound(to_team: int, from_baseline := false) -> void:
 	ball.set_paused(false)
 	handler.take_ball(ball)
 	ctx.possession = to_team
+	_frontcourt = false
+	_backcourt_time = 0.0
 	clock.reset_shot_clock()
 
 

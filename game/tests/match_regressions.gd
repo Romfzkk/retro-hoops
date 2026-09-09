@@ -15,6 +15,7 @@ var _failures: Array[String] = []
 
 func _ready() -> void:
 	_ownership()
+	_backcourt_rules()
 	_pass_expiry()
 	_free_throw_scoring()
 	_foul_rebound()
@@ -101,6 +102,49 @@ func _ownership() -> void:
 	_check("holder and context agree", game.ball.holder == second and game.ctx.carrier == second)
 	_check("held ball is at its anchor", game.ball.global_position.is_equal_approx(second.ball_anchor.global_position))
 	game.free()
+
+
+## Both backcourt rules, which are otherwise only exercised by an AI that is
+## trying not to break them and so never proves they work.
+func _backcourt_rules() -> void:
+	var game := _fixture()
+	var carrier: PlayerPawn = game.squads[0][0]
+	var attack := CourtMetrics.attack_sign(0)
+	carrier.take_ball(game.ball)
+	game._update_context()
+
+	# Held behind halfway past the count.
+	carrier.global_position.x = -attack * 4.0
+	game._frontcourt = false
+	game._backcourt_time = MatchSceneScript.BACKCOURT_LIMIT - 0.05
+	game._tick_backcourt(0.1)
+	_check("holding the backcourt past the count is a turnover",
+		game.ctx.possession == 1)
+
+	# Over halfway, then back over it.
+	var second := _fixture()
+	var mover: PlayerPawn = second.squads[0][0]
+	mover.take_ball(second.ball)
+	second._update_context()
+	mover.global_position.x = attack * 3.0
+	second._tick_backcourt(0.1)
+	_check("crossing halfway establishes the frontcourt", second._frontcourt)
+	mover.global_position.x = -attack * 3.0
+	second._tick_backcourt(0.1)
+	_check("returning over halfway is a turnover", second.ctx.possession == 1)
+
+	# A carrier who never established the frontcourt may sit behind halfway.
+	var third := _fixture()
+	var waiting: PlayerPawn = third.squads[0][0]
+	waiting.take_ball(third.ball)
+	third._update_context()
+	waiting.global_position.x = -attack * 5.0
+	third._tick_backcourt(0.5)
+	_check("the count alone is not a violation", third.ctx.possession == 0)
+
+	game.free()
+	second.free()
+	third.free()
 
 
 func _pass_expiry() -> void:

@@ -224,8 +224,10 @@ func _on_shot(pawn: PlayerPawn, points: int, quality: float) -> void:
 		pawn.global_position.y])
 
 
-func _on_pass(passer: PlayerPawn, target: PlayerPawn) -> void:
-	_log.append("  t=%5.2f  PASS from %s to %s" % [_elapsed,
+func _on_pass(passer: PlayerPawn, target: PlayerPawn, kind: int) -> void:
+	const NAMES := ["chest", "bounce", "lob", "outlet"]
+	_log.append("  t=%5.2f  PASS (%s) from %s to %s" % [_elapsed,
+		NAMES[clampi(kind, 0, NAMES.size() - 1)],
 		passer.data["ln"], target.data["ln"]])
 
 

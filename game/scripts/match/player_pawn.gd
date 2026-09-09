@@ -4,12 +4,34 @@ extends CharacterBody3D
 # Movement, action timing and ball releases for one player.
 
 signal shot_released(pawn: PlayerPawn, points: int, quality: float)
-signal ball_passed(pawn: PlayerPawn, target: PlayerPawn)
+signal ball_passed(pawn: PlayerPawn, target: PlayerPawn, kind: int)
 signal ball_gathered(pawn: PlayerPawn)
 signal dunked(pawn: PlayerPawn)
 signal steal_attempted(pawn: PlayerPawn, target: PlayerPawn)
 
 enum State { LOCOMOTION, SHOOT, PASS, DUNK, LAYUP, JUMP, STEAL, STUMBLE }
+
+## How the ball is delivered. The passer picks one from what is in front of
+## them rather than throwing the same ball at every situation.
+enum PassKind { CHEST, BOUNCE, LOB, OUTLET }
+
+## Flight time multipliers against the chest pass, which sets the baseline.
+const PASS_FLIGHT := {
+	PassKind.CHEST: 1.0,
+	PassKind.BOUNCE: 0.78,
+	PassKind.LOB: 1.95,
+	PassKind.OUTLET: 0.72,
+}
+## A bounce pass goes under a defender's hands, a lob goes over everyone but
+## hangs long enough to be read.
+const PASS_INTERCEPT := {
+	PassKind.CHEST: 1.0,
+	PassKind.BOUNCE: 0.45,
+	PassKind.LOB: 1.35,
+	PassKind.OUTLET: 1.15,
+}
+## Where the ball goes past the defender's reach on a bounce pass.
+const BOUNCE_REACH := 0.62
 
 const GRAVITY := 9.806
 const CHARGE_TIME := 0.85
@@ -483,6 +505,45 @@ func _tick_pass(delta: float) -> void:
 		_enter(State.LOCOMOTION)
 
 
+## Reads the situation once and commits. A lob only makes sense to someone on
+## their way to the rim, a bounce pass only earns its slower arrival when
+## somebody is standing in the lane, and an outlet is for the length of the
+## floor.
+func _choose_pass(target: PlayerPawn, from: Vector3, to: Vector3) -> PassKind:
+	var distance := from.distance_to(to)
+	var toward_rim := target.rim() - target.global_position
+	toward_rim.y = 0.0
+	var cutting := target.velocity.length() > 2.4 and toward_rim.length() < 6.0 \
+		and toward_rim.normalized().dot(
+			Vector3(target.velocity.x, 0.0, target.velocity.z).normalized()) > 0.5
+	if cutting and target.can_dunk() and distance > 4.0 and distance < 17.0:
+		return PassKind.LOB
+	if distance > 15.0:
+		return PassKind.OUTLET
+	if distance < 10.0 and _lane_crowded(from, to):
+		return PassKind.BOUNCE
+	return PassKind.CHEST
+
+
+## Whether anyone is close enough to the line to get a hand to it, without
+## rolling for the steal. The roll belongs to _lane_thief; this only decides
+## what kind of pass is worth throwing.
+func _lane_crowded(from: Vector3, to: Vector3) -> bool:
+	var lane := to - from
+	var length := lane.length()
+	if length < 0.5:
+		return false
+	var direction := lane / length
+	for defender in opponents:
+		var offset := defender.global_position + Vector3.UP * 1.0 - from
+		var along := offset.dot(direction)
+		if along < 0.6 or along > length - 0.35:
+			continue
+		if (offset - direction * along).length() < INTERCEPT_REACH * 1.6:
+			return true
+	return false
+
+
 func _send_pass(target: PlayerPawn) -> void:
 	if ball == null or ball.holder != self:
 		return
@@ -490,8 +551,26 @@ func _send_pass(target: PlayerPawn) -> void:
 	# Lead the receiver so a moving target does not have to stop.
 	var lead := target.velocity * 0.22
 	var to := target.global_position + lead + Vector3.UP * (target.rig.shoulder_height * 0.8)
+	var kind := _choose_pass(target, from, to)
+
+	match kind:
+		PassKind.LOB:
+			# Out in front and above the reach, where a cutter finishes it.
+			to = target.global_position + target.velocity * 0.45 \
+				+ Vector3.UP * (target.standing_reach() + 0.30)
+		PassKind.OUTLET:
+			to += target.velocity * 0.30
+		PassKind.BOUNCE:
+			# Aimed at the floor short of the receiver; the bounce carries it
+			# the rest of the way, under whoever is in the lane.
+			to = from.lerp(Vector3(to.x, 0.0, to.z), BOUNCE_REACH) \
+				+ Vector3.UP * CourtMetrics.BALL_RADIUS
+		_:
+			pass
+
 	var distance := from.distance_to(to)
-	var zip := clampf(0.16 + distance * 0.026, 0.18, 0.55)
+	var zip := clampf(0.16 + distance * 0.026, 0.18, 0.55) \
+		* float(PASS_FLIGHT[kind])
 	var accuracy := clampf(float(data["pas"]) / 99.0, 0.2, 1.0)
 	var wobble := (1.0 - accuracy) * 0.35
 	to += Vector3(_rng.randfn(0.0, wobble), _rng.randfn(0.0, wobble * 0.4),
@@ -500,7 +579,7 @@ func _send_pass(target: PlayerPawn) -> void:
 	# Whether the pass is picked off is decided here, from who is actually
 	# sitting in the lane. Letting any nearby defender grab it in flight turns
 	# every pass into a coin toss.
-	var thief := _lane_thief(from, to)
+	var thief := _lane_thief(from, to, float(PASS_INTERCEPT[kind]))
 	ball.pass_target = thief.get_instance_id() if thief != null \
 		else target.get_instance_id()
 	ball.last_touched_by = get_instance_id()
@@ -509,12 +588,13 @@ func _send_pass(target: PlayerPawn) -> void:
 	has_ball = false
 	pickup_cooldown = 0.2
 	target.pickup_cooldown = 0.0
-	ball_passed.emit(self, target)
+	ball_passed.emit(self, target, int(kind))
 
 
 # A defender close to the line of the pass gets one roll to jump it, weighted
 # by their steal rating against the passer's vision.
-func _lane_thief(from: Vector3, to: Vector3) -> PlayerPawn:
+func _lane_thief(from: Vector3, to: Vector3,
+		exposure := 1.0) -> PlayerPawn:
 	var lane := to - from
 	var length := lane.length()
 	if length < 0.5:
@@ -528,7 +608,7 @@ func _lane_thief(from: Vector3, to: Vector3) -> PlayerPawn:
 		if (offset - direction * along).length() > INTERCEPT_REACH:
 			continue
 		var edge := (float(defender.data["stl"]) - float(data["pas"])) / 260.0
-		if _rng.randf() < clampf(INTERCEPT_BASE + edge, 0.02, 0.30):
+		if _rng.randf() < clampf((INTERCEPT_BASE + edge) * exposure, 0.01, 0.34):
 			return defender
 	return null
 
