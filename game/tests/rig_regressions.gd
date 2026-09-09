@@ -25,8 +25,8 @@ func _ready() -> void:
 	var space := ModelRig.relative_transform(skeleton, visible_rig)
 	for start in ModelRetarget.LIMB_ENDS:
 		var end: String = ModelRetarget.LIMB_ENDS[start]
-		var a := space * skeleton.get_bone_global_pose(visible_rig._bone(start)).origin
-		var b := space * skeleton.get_bone_global_pose(visible_rig._bone(end)).origin
+		var a := space * visible_rig.posed_bone(visible_rig._bone(start)).origin
+		var b := space * visible_rig.posed_bone(visible_rig._bone(end)).origin
 		var alignment := (b - a).normalized().dot(Vector3.DOWN)
 		_check("%s hangs down once (dot %.3f)" % [start, alignment], alignment > 0.99)
 	var before := visible_rig.grip_position(1.0)

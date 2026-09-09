@@ -122,9 +122,25 @@ func _setup_feet() -> void:
 		hand_r.position = Vector3.UP * height * 0.045 / units
 
 
+## Where a bone actually sits once the pose is applied, composed from the local
+## poses rather than read from get_bone_global_pose.
+##
+## That accessor does not carry a pose rotation down into its children here:
+## rotating a bone ninety degrees leaves the child's reported origin exactly
+## where it was, so anything asking where a hand or a foot ended up has to walk
+## the chain itself.
+func posed_bone(index: int) -> Transform3D:
+	var result := _skeleton.get_bone_pose(index)
+	var cursor := _skeleton.get_bone_parent(index)
+	while cursor >= 0:
+		result = _skeleton.get_bone_pose(cursor) * result
+		cursor = _skeleton.get_bone_parent(cursor)
+	return result
+
+
 func anchor_position(anchor: Node3D) -> Vector3:
 	var attachment := anchor.get_parent() as BoneAttachment3D
-	return _skeleton.global_transform * _skeleton.get_bone_global_pose(attachment.bone_idx) \
+	return _skeleton.global_transform * posed_bone(attachment.bone_idx) \
 		* anchor.position
 
 

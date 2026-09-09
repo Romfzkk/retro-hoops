@@ -46,7 +46,15 @@ func _init(skeleton: Skeleton3D, bones: Dictionary, to_rig: Transform3D) -> void
 			else skeleton.get_bone_global_rest(parent).basis
 		_frames[index] = (_to_rig * parent_basis.orthonormalized()) \
 			.get_rotation_quaternion()
-		_fixes[index] = _straighten(index, String(key))
+
+	# Parents first: a limb is straightened against what its parent has already
+	# done to it, not against the bind pose it started from.
+	var ordered: Array = bones.keys()
+	ordered.sort_custom(func(a, b): return _depth(bones[a]) < _depth(bones[b]))
+	for key in ordered:
+		var index: int = bones[key]
+		if index >= 0:
+			_fixes[index] = _straighten(index, String(key), _inherited_fix(index))
 	for key in bones:
 		var index: int = bones[key]
 		if index >= 0:
@@ -58,6 +66,21 @@ func _init(skeleton: Skeleton3D, bones: Dictionary, to_rig: Transform3D) -> void
 ## sets poses and reads them back in the same frame - the rig measuring its own
 ## reach, a test asserting a limb hangs down - otherwise sees the rest pose and
 ## concludes nothing was written.
+## The bone's transform built from the poses actually set on it.
+##
+## get_bone_global_pose does not reflect a pose rotation in its children's
+## origins here - rotating a bone ninety degrees leaves the child exactly where
+## it was - so anything measuring where a limb points has to compose the chain
+## itself.
+func posed(index: int) -> Transform3D:
+	var result := _skeleton.get_bone_pose(index)
+	var cursor := _skeleton.get_bone_parent(index)
+	while cursor >= 0:
+		result = _skeleton.get_bone_pose(cursor) * result
+		cursor = _skeleton.get_bone_parent(cursor)
+	return result
+
+
 func flush() -> void:
 	_skeleton.force_update_all_bone_transforms()
 
@@ -67,7 +90,8 @@ func flush() -> void:
 ## non-uniform scale, and orthonormalising a scaled basis does not recover the
 ## rotation it was built from, which leaves each limb short of vertical by a
 ## different amount.
-func _straighten(index: int, key: String) -> Quaternion:
+func _straighten(index: int, key: String,
+		inherited: Quaternion) -> Quaternion:
 	if not LIMB_ENDS.has(key) or not _bones.has(LIMB_ENDS[key]):
 		return Quaternion.IDENTITY
 	var end: int = _bones[LIMB_ENDS[key]]
@@ -77,7 +101,34 @@ func _straighten(index: int, key: String) -> Quaternion:
 		- _skeleton.get_bone_global_rest(index).origin)
 	if span.length_squared() < 0.000001:
 		return Quaternion.IDENTITY
-	return Quaternion(span.normalized(), Vector3.DOWN)
+	# Aim at where down ends up once the parents have had their turn, so the
+	# chain composes to vertical instead of each joint overshooting by whatever
+	# the one above it did.
+	return Quaternion(span.normalized(), (inherited.inverse() * Vector3.DOWN).normalized())
+
+
+## How deep a bone sits, so a pass can be ordered from the root down.
+func _depth(index: int) -> int:
+	var steps := 0
+	var cursor := _skeleton.get_bone_parent(index)
+	while cursor >= 0:
+		steps += 1
+		cursor = _skeleton.get_bone_parent(cursor)
+	return steps
+
+
+## The straightening already applied above this bone, root first.
+func _inherited_fix(index: int) -> Quaternion:
+	var chain: Array[Quaternion] = []
+	var cursor := _skeleton.get_bone_parent(index)
+	while cursor >= 0:
+		if _fixes.has(cursor):
+			chain.push_front(_fixes[cursor])
+		cursor = _skeleton.get_bone_parent(cursor)
+	var total := Quaternion.IDENTITY
+	for step in chain:
+		total = total * step
+	return total
 
 
 func write(index: int, rotation: Quaternion) -> void:
