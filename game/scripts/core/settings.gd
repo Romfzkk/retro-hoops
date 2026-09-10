@@ -16,6 +16,9 @@ const DEFAULTS := {
 	"music_volume": 0.6,
 	"crowd_volume": 0.8,
 	"render_scale": 1.0,
+	## 0 off, 1 FSR 1, 2 FSR 2. Godot has no DLSS; FSR is the equivalent it
+	## does have, and FSR 2 is the temporal one worth using.
+	"upscaling": 0,
 	"retro_filter": true,
 	"retro_strength": 0.6,
 	"scanlines": false,
@@ -40,6 +43,7 @@ func _ready() -> void:
 	_assign_primary_pad(0, true)
 	load_from_disk()
 	apply_window()
+	apply_rendering()
 
 
 func get_value(key: String) -> Variant:
@@ -96,6 +100,30 @@ func apply_window() -> void:
 		else DisplayServer.WINDOW_MODE_WINDOWED
 	if DisplayServer.window_get_mode() != mode:
 		DisplayServer.window_set_mode(mode)
+
+
+## Renders the 3D viewport below the window and scales it back up, which is
+## where the frame time goes when a character costs a hundred thousand
+## triangles and there are ten of them.
+##
+## FSR 2 is temporal and needs the desktop renderer; the mobile backend has no
+## implementation of it, so a phone falls back to plain bilinear rather than
+## silently rendering nothing.
+func apply_rendering() -> void:
+	var window := Engine.get_main_loop().root as Window
+	if window == null:
+		return
+	var scale := clampf(float(get_value("render_scale")), 0.5, 1.0)
+	var wanted := Viewport.SCALING_3D_MODE_BILINEAR
+	match int(get_value("upscaling")):
+		1:
+			wanted = Viewport.SCALING_3D_MODE_FSR
+		2:
+			wanted = Viewport.SCALING_3D_MODE_FSR2
+	if OS.has_feature("mobile") and wanted == Viewport.SCALING_3D_MODE_FSR2:
+		wanted = Viewport.SCALING_3D_MODE_FSR
+	window.scaling_3d_mode = wanted
+	window.scaling_3d_scale = scale
 
 
 func wants_touch_controls() -> bool:

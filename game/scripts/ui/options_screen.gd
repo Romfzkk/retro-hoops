@@ -4,6 +4,7 @@ const CAMERA_NAMES := ["BROADCAST", "BEHIND", "HIGH", "COURTSIDE", "BASELINE"]
 const SHOT_STYLE_NAMES := ["TIMING", "ASSISTED"]
 const SHOT_STYLES := [Settings.ShotStyle.HYBRID, Settings.ShotStyle.AUTO]
 const DIFFICULTY_NAMES := ["ROOKIE", "PRO", "ALL-STAR", "LEGEND"]
+const UPSCALING_NAMES := ["OFF", "FSR 1", "FSR 2"]
 const TOUCH_NAMES := ["AUTO", "ALWAYS", "NEVER"]
 
 
@@ -34,6 +35,10 @@ func _refresh() -> void:
 			"value": _on_off(Settings.get_value("fullscreen"))},
 		{"id": "shadows", "label": "SHADOWS",
 			"value": _on_off(Settings.get_value("shadows"))},
+		{"id": "upscaling", "label": "UPSCALING",
+			"value": UPSCALING_NAMES[int(Settings.get_value("upscaling"))]},
+		{"id": "render_scale", "label": "RENDER SCALE",
+			"value": _percent(Settings.get_value("render_scale"))},
 		{"id": "touch", "label": "TOUCH CONTROLS",
 			"value": TOUCH_NAMES[int(Settings.get_value("touch_controls"))]},
 		{"id": "master", "label": "MASTER VOLUME",
@@ -62,6 +67,15 @@ func on_adjust(id: String, step: int) -> void:
 			Settings.apply_window()
 		"shadows":
 			Settings.set_value("shadows", not Settings.get_value("shadows"))
+		"upscaling":
+			_cycle("upscaling", step, UPSCALING_NAMES.size())
+			Settings.apply_rendering()
+		"render_scale":
+			# Below half the window there is nothing left for the upscaler to
+			# reconstruct from.
+			Settings.set_value("render_scale", clampf(
+				float(Settings.get_value("render_scale")) + float(step) * 0.05, 0.5, 1.0))
+			Settings.apply_rendering()
 		"touch":
 			_cycle("touch_controls", step, TOUCH_NAMES.size())
 		"master":
