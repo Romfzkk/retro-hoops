@@ -29,6 +29,7 @@ func _ready() -> void:
 		var b := space * visible_rig.posed_bone(visible_rig._bone(end)).origin
 		var alignment := (b - a).normalized().dot(Vector3.DOWN)
 		_check("%s hangs down once (dot %.3f)" % [start, alignment], alignment > 0.99)
+	_bend_axes(visible_rig, space)
 	var before := visible_rig.grip_position(1.0)
 	visible_rig.set_target("shoulder_l", Vector3(PI, 0.0, 0.0))
 	visible_rig.snap_to_target()
@@ -44,6 +45,31 @@ func _ready() -> void:
 	for failure in _failures:
 		push_error(failure)
 	get_tree().quit(1 if not _failures.is_empty() else 0)
+
+
+## Which way a joint bends, not only which way the limb ends up pointing.
+##
+## Pointing down is the easy half and it passed for a long time while the
+## bending was wrong: an elbow told to come forward swung out sideways instead,
+## because it inherited the rotation that straightened the shoulder out of its
+## T-pose. Nothing here noticed, because the limb still pointed somewhere
+## reasonable. So the angle is checked against where it was asked to go.
+func _bend_axes(rig: PlayerRig, space: Transform3D) -> void:
+	const BEND := 0.7
+	var wanted := Vector3(0.0, -cos(BEND), -sin(BEND))
+	for start in ModelRetarget.LIMB_ENDS:
+		for key in ModelRetarget.LIMB_ENDS:
+			rig.set_target(key, Vector3.ZERO)
+		rig.set_target(start, Vector3(BEND, 0.0, 0.0))
+		rig.snap_to_target()
+		var a := space * rig.posed_bone(rig._bone(start)).origin
+		var b := space * rig.posed_bone(rig._bone(ModelRetarget.LIMB_ENDS[start])).origin
+		var alignment := (b - a).normalized().dot(wanted)
+		_check("%s pitches forward, not sideways (dot %.3f)" % [start, alignment],
+			alignment > 0.999)
+	for key in ModelRetarget.LIMB_ENDS:
+		rig.set_target(key, Vector3.ZERO)
+	rig.snap_to_target()
 
 
 func _skin_weights(rig: PlayerRig) -> void:
